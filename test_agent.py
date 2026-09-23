@@ -44,7 +44,7 @@ agent = create_agent(
 )
 
 result = agent.invoke(
-    {"messages": [{"role": "user", "content": "广州明天的天气怎么样？"}]}
+    {"messages": [{"role": "user", "content": "广州的天气，明天的天气怎么样？"}]}
 )
 
 for msg in result['messages']:
