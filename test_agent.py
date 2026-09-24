@@ -4,11 +4,17 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langchain.agents import create_agent
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 
 load_dotenv()
+
+# 用 SQLite 存对话历史
+# checkpointer = SqliteSaver.from_conn_string("conversations.db")
+
 
 def get_weather(city: str) -> str:
     """Do something."""
@@ -119,21 +125,35 @@ def calculate(expression: str) -> str:
         return f"The result of {expression} is {result}."
     except Exception as e:
         return f"Error calculating expression: {e}"
+# 用 SQLite 存对话历史
+with SqliteSaver.from_conn_string("conversations.db") as checkpointer:
+    agent = create_agent(
+        model="openai:deepseek-flash", # 用 DeepSeek 就改成 "deepseek-chat" 并配好 base_url
+        tools=[get_weather, calculate, get_weather_forecast, get_yesterday_weather],
+        system_prompt="You are a helpful assistant",
+        checkpointer=checkpointer,  # 关键：让 Agent 记住对话
+    )
+    config = {"configurable": {"thread_id": "user-001"}}
+    while True:
+        user_input = input("你: ")
+        if user_input == 'exit':
+            break
+        result = agent.invoke(
+            {"messages": [{'role': "user","content": user_input}]},
+            config = config,
+        )
+        print("AI:", result["messages"][-1].content)
 
-agent = create_agent(
-    model="openai:deepseek-flash", # 用 DeepSeek 就改成 "deepseek-chat" 并配好 base_url
-    tools=[get_weather, calculate, get_weather_forecast, get_yesterday_weather,_weather_code_description],
-    system_prompt="You are a helpful assistant",
-)
+# result = agent.invoke(
+#     {"messages": [{"role": "user", "content": "广州的天气，昨天的天气，明天的天气怎么样？"}]},
+#     config = config,
+# )
 
-result = agent.invoke(
-    {"messages": [{"role": "user", "content": "广州的天气，昨天的天气，明天的天气怎么样？"}]}
-)
 
-for msg in result['messages']:
-    print('--')
-    print(type(msg).__name__,":",msg.content)
-    if hasattr(msg, "tool_calls") and msg.tool_calls:
-        print("tool_calls:", msg.tool_calls)
+# for msg in result['messages']:
+#     print('--')
+#     print(type(msg).__name__,":",msg.content)
+#     if hasattr(msg, "tool_calls") and msg.tool_calls:
+#         print("tool_calls:", msg.tool_calls)
 
 # print(result["messages"][-1].content)
