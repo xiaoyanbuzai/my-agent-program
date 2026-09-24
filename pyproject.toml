@@ -8,6 +8,7 @@ dependencies = [
     "langchain>=1.4.2",
     "langchain-openai>=1.6.3",
     "python-dotenv>=1.2.3",
+    "tzdata>=2026.4",
 ]
 
 [project.scripts]
@@ -16,3 +17,8 @@ my-agent-program = "my_agent_program:main"
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
