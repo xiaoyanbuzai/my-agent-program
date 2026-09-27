@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 conversations.db
+chroma_db/
+papers/*.pdf
