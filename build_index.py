@@ -3,6 +3,7 @@ from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
+# from langchain_openai import OpenAIEmbeddings
 
 def build_index(pdf_path: str, persist_dir: str = "./chroma_db"):
     #   读取 PDF
@@ -32,7 +33,7 @@ def build_index(pdf_path: str, persist_dir: str = "./chroma_db"):
     print(f"文本切块完成,总块数: {len(chunks)}")
 
     # 创建向量存储Chroma
-    embeddings = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(model_name = "all-MiniLM-L6-v2")
     db = Chroma.from_texts(
         texts = chunks,
         embedding = embeddings,

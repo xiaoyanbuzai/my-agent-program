@@ -8,6 +8,7 @@ dependencies = [
     "chromadb>=1.5.9",
     "langchain>=1.4.2",
     "langchain-community>=0.4.2",
+    "langchain-huggingface>=1.2.2",
     "langchain-openai>=1.6.3",
     "langchain-text-splitters>=1.1.2",
     "langgraph-checkpoint-sqlite>=3.1.1",
@@ -24,6 +25,10 @@ my-agent-program = "my_agent_program:main"
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [dependency-groups]
 dev = [
