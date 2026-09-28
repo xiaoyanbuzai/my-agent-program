@@ -2,7 +2,7 @@ import os
 import chromadb
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 # from langchain_openai import OpenAIEmbeddings
 
@@ -45,13 +45,15 @@ def build_index(pdf_path: str, paper_name: str):
 
     # 创建向量存储Chroma
     embeddings = HuggingFaceEmbeddings(model_name = "all-MiniLM-L6-v2")
+    # ids = [f"{paper_name}_{i}" for i in range(len(chunks))]
     db = Chroma.from_texts(
         texts = chunks,
         embedding = embeddings,
         persist_directory = "./chroma_db",
         collection_name=paper_name,   # 关键：每篇论文一个 collection
+        # ids = ids,
     )
-    db.persist()
+
     print(f"《{paper_name}》索引已保存")
 
 if __name__ == "__main__":

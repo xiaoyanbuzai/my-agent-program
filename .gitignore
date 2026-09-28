@@ -2,7 +2,11 @@
 .venv/
 __pycache__/
 *.pyc
-conversation.db
 conversations.db
+conversations.db-shm
+conversations.db-wal
+conversation.db
+conversation.db-shm
+conversation.db-wal
 chroma_db/
 papers/*.pdf

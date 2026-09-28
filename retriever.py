@@ -1,16 +1,21 @@
 import os
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_huggingface import  HuggingFaceEmbeddings
 
 embeddings = HuggingFaceEmbeddings(model_name = "all-MiniLM-L6-v2")
 
-vectorstore = Chroma(persist_directory = "./chroma_db", embedding_function = embeddings)
+# vectorstore = Chroma(persist_directory = "./chroma_db", embedding_function = embeddings)
 
-retriever = vectorstore.as_retriever(search_kwargs = {"k": 3})
+# retriever = vectorstore.as_retriever(search_kwargs = {"k": 3})
 
-def search_paper(query:str):
+def search_paper(query:str, paper_name: str):
     """搜索论文中与查询相关的段落,返回相关内容"""
-    docs = retriever.invoke(query)
+    db = Chroma(
+        persist_directory="./chroma_db",
+        embedding_function=embeddings,
+        collection_name=paper_name,
+    )
+    docs = db.similarity_search(query, k=5)
     if not docs:
         return "未找到相关内容"
     return "\n\n---\n\n".join([doc.page_content for doc in docs])
