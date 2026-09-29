@@ -10,4 +10,3 @@ conversation.db-shm
 conversation.db-wal
 chroma_db/
 papers/*.pdf
-.github/skills/
