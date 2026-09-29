@@ -1,3 +1,5 @@
+import os
+
 from typing import Annotated
 from typing_extensions import TypedDict
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -22,6 +24,7 @@ from langchain_core.messages import ToolMessage
 import chromadb
 #   读取 .env 文件里的 API Key 和 base_url
 load_dotenv()
+os.environ["HF_HUB_OFFLINE"] = "1" #已下载模型 直接用本地的
 
 #   建模型  
 llm = ChatOpenAI( model="deepseek-flash",

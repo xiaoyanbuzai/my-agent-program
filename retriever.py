@@ -1,4 +1,6 @@
 import os
+os.environ["HF_HUB_OFFLINE"] = "1" #已下载模型 直接用本地的 未下载的话就要先下载了
+
 from langchain_chroma import Chroma
 from langchain_huggingface import  HuggingFaceEmbeddings
 

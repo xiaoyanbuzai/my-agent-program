@@ -3,8 +3,9 @@ import chromadb
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 # from langchain_openai import OpenAIEmbeddings
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 def build_index(pdf_path: str, paper_name: str):
     #   读取 PDF
