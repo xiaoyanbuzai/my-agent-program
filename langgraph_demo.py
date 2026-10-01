@@ -56,6 +56,7 @@ def chatbot(state: State):
             "你是一个文献助手。用户的问题如果涉及论文内容，"
             "你必须先调用工具检索，再基于检索结果回答。"
             "如果用户没有明确指哪篇论文，默认指最近讨论的那篇。"
+            "如果用户问论文的局限性、不足或未来工作，请同时检索'局限性 limitation'和'结论 conclusion future work'两个关键词。"
         )
     }
     messages = [system] + state["messages"]
