@@ -13,11 +13,12 @@ from typing_extensions import TypedDict
 from dotenv import load_dotenv
 import chromadb
 
+
 load_dotenv()
 
 client = chromadb.PersistentClient(path = "./chroma_db")
 papers = [c.name for c in client.list_collections()]
-paper_name = papers[0]
+paper_name = papers[2]
 print(f"评估论文: {paper_name}\n")
 
 Tools,Tool_MAP = make_tools(paper_name)
@@ -104,7 +105,7 @@ graph = graph_builder.compile(checkpointer = checkpointer)
 questions = [
     "论文在 Fountain 数据集上用了多少幅图像？",
     "论文的灰度误差阈值设为多少？",
-    "论文的深度阈值 τ 设为多少？",
+    "论文在纹理映射有效性判断中用了哪两个阈值？分别设为多少？",
     "论文在 Fountain 上本文算法的 SSIM 是多少？",
     "论文对比了哪几种算法？",
     "论文的语义标签是用什么工具生成的？",
@@ -135,7 +136,7 @@ for i,q in enumerate(questions,1):
 STANDARD = {
     1: "33 幅",
     2: "自身灰度值的 20%",
-    3: "0.01 和 0.02",
+    3: "深度值阈值：τ = 0.01   z 分量阈值：τ = 0.02",
     4: "0.7352",
     5: "简单组合方法、Dai 等、Zhou 等、Bi 等、Fu 等、Wang 等",
     6: "LabelMe",
