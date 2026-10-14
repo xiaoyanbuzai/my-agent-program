@@ -3,6 +3,8 @@ import os
 from typing import Annotated
 from typing_extensions import TypedDict
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.store.sqlite import SqliteStore
+from langgraph.config import get_store
 #    记忆 字典 
 
 from langgraph.graph import StateGraph,START,END
@@ -49,7 +51,12 @@ llm_with_tools = llm.bind_tools(Tools)
 
 
 #   机器人回应
-def chatbot(state: State):
+def chatbot(state: State,config,store):
+    user_id = config["configurable"].get('user_id','default')
+
+    memories = store.search((user_id,'memories'), query = state["messages"][-1].content)
+    memory_text = "\n".join([m.value['text'] for m in memories])
+
     system = {
         "role":"system",
         "content":(
@@ -57,7 +64,7 @@ def chatbot(state: State):
             "你必须先调用工具检索，再基于检索结果回答。"
             "如果用户没有明确指哪篇论文，默认指最近讨论的那篇。"
             # "如果用户问论文的局限性、不足或未来工作，请同时检索'局限性 limitation'和'结论 conclusion future work'两个关键词。"
-            "如果用户问论文的权重函数，请同时检索'权重函数 weight W'和'加权平均 cosθ d'两个关键词。"
+            f"关于这个用户的历史记忆：\n{memory_text}"
         )
     }
     messages = [system] + state["messages"]
@@ -93,7 +100,8 @@ def should_continue(state: State):
     return END
 
 #   总结节点
-def summarize(state:State):
+def summarize(state:State, config):
+    user_id = config["configurable"].get('user_id','default')
     queries = [ "研究问题 motivation problem",
     "方法 method approach framework",
     "数据集 dataset ShapeNet CUB experiment setup",
@@ -113,11 +121,23 @@ def summarize(state:State):
             f"论文片段：\n{context}"
         ),
     }
-    recent = state["messages"][-15:]  # 只取最近的15条消息，避免上下文过长
-    return {"messages":[llm.invoke([system] + recent)]}
+    recent = state["messages"]  
+    result = llm.invoke([system] + recent)
+    
+    # 存进长期记忆
+    store = get_store()
+    store.put(
+        (user_id, "memories"),
+        key=f"summary_{paper_name}",
+        value={"text": f"论文《{paper_name}》的总结：{result.content[:500]}"},
+    )
+    
+    return {"messages": [result]}
+    # return {"messages":[llm.invoke([system] + recent)]}
 
 #   批判
 def critique(state:State):
+    user_id = config["configurable"].get('user_id','default')
     context_parts = []
     for q in ["实验","方法","数据集","结论","局限性"]:
         context_parts.append(f"【{q}】\n{search_paper(q,paper_name)}")
@@ -133,8 +153,17 @@ def critique(state:State):
             f"论文片段：\n{context}"
         ),
     }
-    recent = state["messages"][-15:]  # 只取最近的15条消息，避免上下文过长
-    return {"messages":[llm.invoke([system] + recent)]}
+    recent = state["messages"] 
+    result = llm.invoke([system] + recent)
+
+    store = get_store()
+    store.put(
+        (user_id, "memories"),
+        key=f"critique_{paper_name}",
+        value={"text": f"论文《{paper_name}》的批判性分析：{result.content[:500]}"},
+    )
+    return {"messages": [result]}
+    # return {"messages":[llm.invoke([system] + recent)]}
 
 #   条件边
 def route_entry(state:State):
@@ -165,9 +194,10 @@ graph_builder.add_edge("tools","chatbot")
 graph_builder.add_edge("summarize", END)
 graph_builder.add_edge("critique", END)
 
-with SqliteSaver.from_conn_string("conversation.db") as checkpointer:
-    graph = graph_builder.compile(checkpointer = checkpointer)
-    config = {"configurable": {"thread_id" : "user-001"}}
+with SqliteSaver.from_conn_string("conversation.db") as checkpointer,\
+     SqliteStore.from_conn_string("memory.db") as store:
+    graph = graph_builder.compile(checkpointer = checkpointer, store = store)
+    config = {"configurable": {"thread_id" : "user-001","user_id" : "user-001"}}
     
     #   交互式  
     while True:
