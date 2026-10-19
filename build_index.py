@@ -1,66 +1,52 @@
-# import os
-# import chromadb
-# from pypdf import PdfReader
-# from langchain_text_splitters import RecursiveCharacterTextSplitter
-# from langchain_chroma import Chroma
-# from langchain_huggingface import HuggingFaceEmbeddings
-# from langchain_openai import OpenAIEmbeddings
-# os.environ["HF_HUB_OFFLINE"] = "1"
+"""单文件入库 CLI（调试 / 批量补录用）。
+
+用法：
+    uv run python build_index.py papers/1.pdf --user 1
+    uv run python build_index.py papers/1.pdf --user 1 --name "论文标题"
+
+批量重建请用 ``scripts/reindex.py``。
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from config import ensure_directories, get_settings
 from indexer import build_index
+from logging_utils import setup_logging
 
 
-# def build_index(pdf_path: str, paper_name: str):
-    #   读取 PDF
-    # if not os.path.exists(pdf_path):
-    #     print(f"错误: 文件不存在 {pdf_path}")
-    #     return
+def main() -> int:
+    parser = argparse.ArgumentParser(description="把单个文件写入指定租户的知识库")
+    parser.add_argument("file", type=Path, help="文件路径")
+    parser.add_argument("--user", type=int, required=True, help="租户 ID")
+    parser.add_argument("--name", default="", help="显示名称，默认取文件名")
+    parser.add_argument("--type", default="", help="文档类型，默认按扩展名推断")
+    args = parser.parse_args()
 
-    # #   检查是否存在同名
-    # client = chromadb.PersistentClient(path = "./chroma_db")
-    # exisiting = [c.name for c in client.list_collections()]
-    # if paper_name in exisiting:
-    #     print(f"错误：论文《{paper_name}》的索引已存在，拒绝写入。")
-    #     print(f"如需重建，请先删除：")
-    #     print(f"  uv run python -c \"import chromadb; chromadb.PersistentClient(path='./chroma_db').delete_collection('{paper_name}')\"")
-    #     return
+    setup_logging()
+    ensure_directories()
 
-    # reader = PdfReader(pdf_path)
-    # full_text = ""
-    # for page in reader.pages:
-    #     text = page.extract_text()
-    #     if text:
-    #         full_text += text + "\n"
+    if not args.file.is_file():
+        print(f"文件不存在：{args.file}")
+        return 1
 
-    # if not full_text.strip():
-    #     print("错误: PDF中未提取到文字,可能是扫描版图片")
-    #     return
+    ext = args.type or args.file.suffix.lstrip(".").lower()
+    if ext not in get_settings().allowed_upload_exts:
+        print(f"不支持的文件类型：{ext}")
+        return 1
 
-    # print(f"PDF 读取完成,总字符数: {len(full_text)}")
+    ok, message = build_index(
+        str(args.file),
+        args.name or args.file.name,
+        ext,
+        args.user,
+    )
+    print(message)
+    return 0 if ok else 2
 
-    # # 切块  
-    # splitter = RecursiveCharacterTextSplitter(
-    #     chunk_size = 1000,
-    #     chunk_overlap = 150,
-    #     separators=["\n\n", "\n", "。", " ", ""],
-    # )
-    # chunks = splitter.split_text(full_text)
-    # print(f"《{paper_name}》读取完成，共 {len(chunks)} 个块")
-
-    # # 创建向量存储Chroma
-    # embeddings = HuggingFaceEmbeddings(model_name = "all-MiniLM-L6-v2")
-    # # ids = [f"{paper_name}_{i}" for i in range(len(chunks))]
-    # db = Chroma.from_texts(
-    #     texts = chunks,
-    #     embedding = embeddings,
-    #     persist_directory = "./chroma_db",
-    #     collection_name=paper_name,   # 关键：每篇论文一个 collection
-    #     # ids = ids,
-    # )
-
-    # print(f"《{paper_name}》索引已保存")
 
 if __name__ == "__main__":
-    pdf_path = input("请输入PDF文件路径(例如 papers/xxx.pdf): ").strip()
-    paper_name = input("论文名称(英文/拼音,用作collection名): ").strip()
-    ok, msg = build_index(pdf_path , paper_name)
-    print(msg)
+    sys.exit(main())

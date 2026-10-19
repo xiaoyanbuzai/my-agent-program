@@ -1,159 +1,51 @@
-import os
-import json
-from datetime import datetime, timedelta
-from urllib.parse import urlencode
-from urllib.request import urlopen
-from zoneinfo import ZoneInfo
-from langgraph.checkpoint.sqlite import SqliteSaver
-from langchain.agents import create_agent
+"""早期天气 Agent 演示（已退役，不参与 Web 应用 / 不在 tests 目录内）。
 
-from dotenv import load_dotenv
-from langchain.agents import create_agent
+原来的模块级 ``input()`` 会让导入即阻塞，``eval()`` 也有安全风险；这里改成
+可手动运行的安全计算演示，供参考，不再作为运行时入口。
+"""
 
-load_dotenv()
+from __future__ import annotations
 
-# 用 SQLite 存对话历史
-# checkpointer = SqliteSaver.from_conn_string("conversations.db")
+import ast
+import operator
 
-
-def get_weather(city: str) -> str:
-    """Do something."""
-    weather_data = {
-        "北京" : "晴,25℃",
-        "上海" : "多云,22℃",
-        "广州" : "多云,28℃",
-        "深圳" : "小雨,26℃",
-        "杭州" : "雷阵雨,24℃",
-    }
-    if city not in weather_data:
-        return f"错误：没有 {city} 的天气数据，请换一个城市。"
-    return f"{city}:{weather_data[city]}"
-def get_weather_forecast(city: str) -> str:
-    """do something."""
-    forecast_data = {
-        "北京" : "晴,26℃",
-        "上海" : "多云,23℃",
-        "广州" : "小雨,27℃",
-        "深圳" : "雷阵雨,25℃",
-        "杭州" : "阴,24℃",
-    }
-    if city not in forecast_data:
-        return f"错误：没有 {city} 的天气预报数据，请换一个城市。"
-    return f"{city}明天的天气预报:{forecast_data[city]}"
+_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
 
 
-def get_yesterday_weather(city: str) -> str:
-    """查询指定城市昨天的实际天气，返回最高/最低温度和降水情况。"""
+def _evaluate(node: ast.AST) -> float:
+    if isinstance(node, ast.Expression):
+        return _evaluate(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
+        return _BIN_OPS[type(node.op)](_evaluate(node.left), _evaluate(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+        return _UNARY_OPS[type(node.op)](_evaluate(node.operand))
+    raise ValueError("只支持数字与 + - * / // % ** 运算")
+
+
+def safe_calculate(expression: str) -> str:
+    """安全计算算术表达式（不使用 eval）。"""
     try:
-        location_query = urlencode({"name": city, "count": 1, "language": "zh", "format": "json"})
-        with urlopen(
-            f"https://geocoding-api.open-meteo.com/v1/search?{location_query}",
-            timeout=10,
-        ) as response:
-            locations = json.load(response).get("results", [])
-
-        if not locations:
-            return f"错误：找不到城市“{city}”，请提供更具体的城市名称。"
-
-        location = locations[0]
-        timezone_name = location.get("timezone", "UTC")
-        local_today = datetime.now(ZoneInfo(timezone_name)).date()
-        yesterday = local_today - timedelta(days=1)
-        weather_query = urlencode(
-            {
-                "latitude": location["latitude"],
-                "longitude": location["longitude"],
-                "start_date": yesterday.isoformat(),
-                "end_date": yesterday.isoformat(),
-                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
-                "temperature_unit": "celsius",
-                "precipitation_unit": "mm",
-                "timezone": timezone_name,
-            }
-        )
-        with urlopen(
-            f"https://api.open-meteo.com/v1/forecast?{weather_query}",
-            timeout=10,
-        ) as response:
-            weather = json.load(response)
-
-        daily = weather["daily"]
-        weather_code = daily["weather_code"][0]
-        description = _weather_code_description(weather_code)
-        maximum = daily["temperature_2m_max"][0]
-        minimum = daily["temperature_2m_min"][0]
-        precipitation = daily["precipitation_sum"][0]
-        return (
-            f"{location['name']}昨天（{yesterday}）：{description}，"
-            f"最高 {maximum}°C，最低 {minimum}°C，降水量 {precipitation} mm。"
-        )
-    except (KeyError, IndexError, ValueError, TimeoutError, OSError, json.JSONDecodeError) as error:
-        return f"查询“{city}”昨天的天气失败：{error}"
+        tree = ast.parse(expression, mode="eval")
+        return f"{expression} = {_evaluate(tree)}"
+    except (SyntaxError, ValueError, ZeroDivisionError) as error:
+        return f"计算失败：{error}"
 
 
-def _weather_code_description(code: int) -> str:
-    """将 WMO 天气代码转换为用户可读的中文描述。"""
-    descriptions = {
-        0: "晴",
-        1: "大部晴朗",
-        2: "局部多云",
-        3: "阴",
-        45: "雾",
-        48: "雾凇",
-        51: "小毛毛雨",
-        53: "毛毛雨",
-        55: "大毛毛雨",
-        61: "小雨",
-        63: "中雨",
-        65: "大雨",
-        71: "小雪",
-        73: "中雪",
-        75: "大雪",
-        80: "小阵雨",
-        81: "中阵雨",
-        82: "强阵雨",
-        95: "雷雨",
-        96: "雷雨伴冰雹",
-        99: "强雷雨伴冰雹",
-    }
-    return descriptions.get(code, f"天气代码 {code}")
-
-def calculate(expression: str) -> str:
-    """Calculate a mathematical expression."""
-    try:
-        result = eval(expression)
-        return f"The result of {expression} is {result}."
-    except Exception as e:
-        return f"Error calculating expression: {e}"
-# 用 SQLite 存对话历史
-with SqliteSaver.from_conn_string("conversations.db") as checkpointer:
-    agent = create_agent(
-        model="openai:deepseek-flash", # 用 DeepSeek 就改成 "deepseek-chat" 并配好 base_url
-        tools=[get_weather, calculate, get_weather_forecast, get_yesterday_weather],
-        system_prompt="You are a helpful assistant",
-        checkpointer=checkpointer,  # 关键：让 Agent 记住对话
-    )
-    config = {"configurable": {"thread_id": "user-001"}}
-    while True:
-        user_input = input("你: ")
-        if user_input == 'exit':
-            break
-        result = agent.invoke(
-            {"messages": [{'role': "user","content": user_input}]},
-            config = config,
-        )
-        print("AI:", result["messages"][-1].content)
-
-# result = agent.invoke(
-#     {"messages": [{"role": "user", "content": "广州的天气，昨天的天气，明天的天气怎么样？"}]},
-#     config = config,
-# )
+def main() -> None:
+    print("早期演示已退役。当前应用入口：uv run python web_app.py")
+    print(safe_calculate("(1 + 2) * 3"))
 
 
-# for msg in result['messages']:
-#     print('--')
-#     print(type(msg).__name__,":",msg.content)
-#     if hasattr(msg, "tool_calls") and msg.tool_calls:
-#         print("tool_calls:", msg.tool_calls)
-
-# print(result["messages"][-1].content)
+if __name__ == "__main__":
+    main()

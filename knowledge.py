@@ -1,57 +1,76 @@
-"""文档智能分析：对上传/入库的文档内容生成摘要、关键词、主题分类。
+"""文档智能分析：生成摘要、关键词、主题分类（结构化 JSON）。
 
-复用项目的 deepseek LLM（通过 ChatOpenAI）完成分析，输出结构化 JSON。
+失败时返回降级结果，不阻断上传流程；所有异常写入日志而不是静默吞掉。
 """
+
+from __future__ import annotations
+
 import json
-import os
-from dotenv import load_dotenv
+import logging
+
 from langchain_openai import ChatOpenAI
 
-load_dotenv()
+from config import get_settings
 
-_llm = None
+logger = logging.getLogger(__name__)
+
+_llm: ChatOpenAI | None = None
+_EMPTY = {"summary": "", "keywords": [], "category": ""}
 
 
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(model="deepseek-flash", temperature=0.2)
+        settings = get_settings()
+        _llm = ChatOpenAI(
+            model=settings.llm_model,
+            temperature=0.2,
+            timeout=settings.llm_timeout,
+            max_retries=1,
+        )
     return _llm
 
 
-def analyze_document(title: str, content: str, max_len: int = 4000) -> dict:
-    """分析文档内容，返回 {title, summary, keywords, category}。
+def _extract_json(text: str) -> str:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("模型输出中没有 JSON 对象")
+    return text[start : end + 1]
 
-    失败时返回降级结果，不让上传流程中断。
-    """
-    snippet = content[:max_len]
+
+def analyze_document(title: str, content: str, max_len: int = 4000) -> dict:
+    """分析文档内容，返回 ``{title, summary, keywords, category}``。"""
+    cleaned = (content or "").strip()
+    if not cleaned:
+        return {"title": title, **_EMPTY}
+
+    snippet = cleaned[:max_len]
     prompt = (
-        "你是一个文献分析助手。分析下面这篇文档的要点，并用 JSON 输出，"
-        "不要输出其他内容，格式如下：\n"
-        "{\"summary\": \"150字以内的核心内容概括\", "
-        "\"keywords\": [\"关键词1\", \"关键词2\", \"关键词3\"], "
-        "\"category\": \"文档所属领域/技术类别\"}\n\n"
+        "你是一个文献分析助手。分析下面文档的要点，只输出一个 JSON 对象，不要输出解释，格式：\n"
+        '{"summary": "150 字以内的核心内容概括", '
+        '"keywords": ["关键词1", "关键词2", "关键词3"], '
+        '"category": "文档所属领域/技术类别"}\n\n'
         f"文档标题：{title}\n文档内容：\n{snippet}"
     )
+
     try:
-        resp = _get_llm().invoke(prompt)
-        text = resp.content if isinstance(resp.content, str) else str(resp.content)
-        # 提取 JSON 块
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("无 JSON 输出")
-        data = json.loads(text[start:end + 1])
-        return {
-            "title": title,
-            "summary": data.get("summary", ""),
-            "keywords": data.get("keywords", []),
-            "category": data.get("category", ""),
-        }
+        response = _get_llm().invoke(prompt)
+        text = response.content if isinstance(response.content, str) else str(response.content)
+        data = json.loads(_extract_json(text))
     except Exception:
-        return {
-            "title": title,
-            "summary": "",
-            "keywords": [],
-            "category": "",
-        }
+        logger.exception("文档分析失败：%s", title)
+        return {"title": title, **_EMPTY}
+
+    keywords = data.get("keywords")
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    if not isinstance(keywords, list):
+        keywords = []
+
+    return {
+        "title": title,
+        "summary": str(data.get("summary", ""))[:500],
+        "keywords": [str(item)[:40] for item in keywords[:8]],
+        "category": str(data.get("category", ""))[:100],
+    }

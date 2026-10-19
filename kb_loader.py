@@ -1,152 +1,259 @@
-"""多格式文档解析器：将 PDF / Word / Markdown / txt 解析为纯文本。
+"""多格式文档解析：PDF / Word / Markdown / txt → 带页码与模态的结构化块。"""
 
-统一返回 [(title, text), ...]，每份文档可包含多个"章节块"。
-"""
-import os
-import pymupdf
+from __future__ import annotations
+
+import logging
 import re
+from pathlib import Path
 
-SUPPORTED_EXT = {".pdf", ".docx", ".md", ".markdown", ".txt"}
+import pymupdf
+
+from chunking import split_by_chars, split_by_toc, split_text_blocks
+from config import get_settings
+from multimodal import MultimodalError, ocr_pdf_page
+
+logger = logging.getLogger(__name__)
+
+TEXT_EXTENSIONS = {".pdf", ".docx", ".md", ".markdown", ".txt"}
+_ZERO_WIDTH = re.compile(r"[\u200b-\u200f\u2028\u2029\ufeff]")
+_PAGE_NUMBER_LINE = re.compile(r"^\s*[-–—]?\s*\d{1,4}\s*[-–—]?\s*$", re.MULTILINE)
 
 
-def load_document(file_path: str):
-    """根据扩展名解析文档，返回 [(title, text), ...]。"""
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext not in SUPPORTED_EXT:
-        raise ValueError(f"不支持的文件类型：{ext}（支持 {sorted(SUPPORTED_EXT)}）")
+class DocumentParseError(ValueError):
+    """文档无法解析。"""
+
+
+def load_document(file_path: str) -> list[dict]:
+    """解析文档，返回 ``[{"title", "content", "page", "modality"}, ...]``。"""
+    path = Path(file_path)
+    if not path.is_file():
+        raise DocumentParseError(f"文件不存在：{path.name}")
+
+    ext = path.suffix.lower()
+    if ext not in TEXT_EXTENSIONS:
+        raise DocumentParseError(f"不支持的文件类型：{ext}")
+
     if ext == ".pdf":
-        blocks = _load_pdf(file_path)
-    elif ext in (".docx",):
-        blocks = _load_docx(file_path)
+        blocks = _load_pdf(path)
+    elif ext == ".docx":
+        blocks = _load_docx(path)
     elif ext in (".md", ".markdown"):
-        blocks = _load_markdown(file_path)
-    elif ext == ".txt":
-        blocks = _load_txt(file_path)
+        blocks = _load_markdown(path)
     else:
-        blocks = []  # 不会到达
+        blocks = _load_txt(path)
 
+    cleaned: list[dict] = []
     for block in blocks:
-        block['content'] = clean_raw_text(block['content'])
+        content = clean_raw_text(block.get("content", ""))
+        if not content:
+            continue
+        cleaned.append(
+            {
+                "title": (block.get("title") or "正文").strip() or "正文",
+                "content": content,
+                "page": int(block.get("page") or 0),
+                "modality": block.get("modality") or "text",
+            }
+        )
+    return cleaned
 
-    return [b for b in blocks if b['content']]
+
+def _load_pdf(path: Path) -> list[dict]:
+    """PDF:优先文本层；文本过少时判定为扫描件并调用视觉模型 OCR。"""
+    try:
+        doc = pymupdf.open(str(path))
+    except Exception as exc:
+        raise DocumentParseError("PDF 打开失败或文件已损坏") from exc
+
+    try:
+        full_text = "\n".join((page.get_text() or "") for page in doc)
+        if len(full_text.strip()) < 50 and doc.page_count > 0:
+            return _ocr_pdf(doc, path)
+
+        toc = doc.get_toc()
+        return split_by_toc(doc, toc) if toc else split_by_chars(doc)
+    finally:
+        doc.close()
 
 
-def _load_pdf(file_path: str):
-    """PDF:按一级书签切章，无书签则按字符切。"""
-    from indexer import split_by_chars, split_by_toc
-    doc = pymupdf.open(file_path)
-    toc = doc.get_toc()
-    if toc:
+def _ocr_pdf(doc: pymupdf.Document, path: Path) -> list[dict]:
+    settings = get_settings()
+    max_pages = min(doc.page_count, settings.ocr_max_pages)
+    logger.info("检测到扫描版 PDF %s,OCR 前 %s 页", path.name, max_pages)
+
+    blocks: list[dict] = []
+    succeeded = 0
+    for page_index in range(max_pages):
         try:
-            chunks = split_by_toc(doc, toc)
+            pixmap = doc[page_index].get_pixmap(dpi=150)
+            text = ocr_pdf_page(pixmap.tobytes("png"))
+            succeeded += 1
+        except MultimodalError as exc:
+            logger.warning("第 %s 页 OCR 失败（%s）：%s", page_index + 1, exc, path.name)
+            text = "[该页识别失败]"
         except Exception:
-            chunks = split_by_chars(doc)
-    else:
-        chunks = split_by_chars(doc)
-    # split_by_toc/split_by_chars 都返回 [{"title","content"}]
-    return [{"title": c["title"], "content": c["content"]} for c in chunks]
+            logger.exception("第 %s 页 OCR 失败：%s", page_index + 1, path.name)
+            text = "[该页识别失败]"
+        blocks.append(
+            {
+                "title": f"第 {page_index + 1} 页",
+                "content": text,
+                "page": page_index + 1,
+                "modality": "text",
+            }
+        )
+
+    if succeeded == 0:
+        raise DocumentParseError(
+            "扫描版 PDF 需要视觉模型 OCR，请检查 ZHIPU_API_KEY 配置或稍后重试"
+        )
+
+    if doc.page_count > max_pages:
+        blocks.append(
+            {
+                "title": "OCR 范围提示",
+                "content": f"该 PDF 共 {doc.page_count} 页，仅自动识别了前 {max_pages} 页。",
+                "page": max_pages,
+                "modality": "text",
+            }
+        )
+    return blocks
 
 
-def _load_docx(file_path: str):
-    """Word:按章节标题分块，否则整篇返回。"""
-    from docx import Document
-    doc = Document(file_path)
-    sections = []          # (title, [paragraphs])
+def _load_docx(path: Path) -> list[dict]:
+    """Word:按 Heading 样式分节，并把表格转成 Markdown 保留数据。"""
+    try:
+        from docx import Document
+    except ImportError as exc:  # pragma: no cover
+        raise DocumentParseError("缺少 python-docx 依赖，无法解析 docx") from exc
+
+    doc = Document(str(path))
+    sections: list[tuple[str, list[str]]] = []
     current_title = "正文"
-    current_paras = []
+    current_lines: list[str] = []
 
-    def flush():
-        nonlocal current_title, current_paras
-        if current_paras and any(p.strip() for p in current_paras):
-            text = "\n".join([p for p in current_paras if p.strip()])
-            sections.append((current_title, text))
-        current_paras = []
+    def flush() -> None:
+        nonlocal current_title, current_lines
+        text = "\n".join(line for line in current_lines if line.strip())
+        if text.strip():
+            sections.append((current_title, [text]))
+        current_lines = []
 
-    for para in doc.paragraphs:
-        style_name = (para.style.name or "").lower() if para.style else ""
-        text = para.text.strip()
+    for paragraph in doc.paragraphs:
+        text = (paragraph.text or "").strip()
         if not text:
             continue
-        # 粗略判断标题（Heading 样式 或 前3级编号引导）
-        is_heading = "heading" in style_name or para.style.style_id in (
-            "Heading1", "Heading2", "Heading3", "Title")
+        style = paragraph.style
+        style_name = ((style.name if style else "") or "").lower()
+        style_id = (getattr(style, "style_id", "") or "") if style else ""
+        is_heading = "heading" in style_name or style_id in {
+            "Heading1",
+            "Heading2",
+            "Heading3",
+            "Title",
+        }
         if is_heading:
             flush()
             current_title = text
         else:
-            current_paras.append(para.text)
+            current_lines.append(text)
     flush()
 
     if not sections:
-        # 无标题结构，整篇作为一个块
-        full = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        return [{"title": "全文", "content": full}] if full.strip() else []
-    return [{"title": t, "content": c} for t, c in sections]
+        full = "\n".join(p.text for p in doc.paragraphs if (p.text or "").strip())
+        if full.strip():
+            sections.append(("全文", [full]))
+
+    for table_index, table in enumerate(doc.tables, start=1):
+        rows = []
+        for row in table.rows:
+            cells = [(cell.text or "").strip().replace("\n", " ") for cell in row.cells]
+            if any(cells):
+                rows.append("| " + " | ".join(cells) + " |")
+        if len(rows) >= 2:
+            header, body = rows[0], rows[1:]
+            markdown = "\n".join([header, "|" + " --- |" * len(table.columns), *body])
+            sections.append((f"表格 {table_index}", [markdown]))
+
+    blocks: list[dict] = []
+    for title, lines in sections:
+        blocks.extend(split_text_blocks("\n".join(lines), title=title))
+    return blocks
 
 
-def _load_markdown(file_path: str):
-    """Markdown:按一级/二级标题分块，保留纯文本内容。"""
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        lines = f.readlines()
-    # 去除代码块围栏，避免把 ``` 也当文本
-    sections = []          # (title, [lines])
+def _load_markdown(path: Path) -> list[dict]:
+    """Markdown：按标题切节，保留正文；代码块围栏不进入正文。"""
+    text = _read_text(path)
+    sections: list[tuple[str, list[str]]] = []
     current_title = "文档开头"
-    current_lines = []
+    current_lines: list[str] = []
     in_code = False
 
-    def flush():
+    def flush() -> None:
         nonlocal current_title, current_lines
-        if current_lines and any(l.strip() for l in current_lines):
-            text = "".join(current_lines).strip()
-            if text:
-                sections.append((current_title, text))
+        body = "".join(current_lines).strip()
+        if body:
+            sections.append((current_title, [body]))
         current_lines = []
 
-    for raw in lines:
+    for raw in text.splitlines(keepends=True):
         stripped = raw.strip()
-        # 代码块围栏
         if stripped.startswith("```"):
             in_code = not in_code
             continue
-        # 标题（行首 # 开头且不在代码块内）
         if not in_code and stripped.startswith("#"):
             flush()
-            # 去掉前面的 # 和空格作为标题名
-            level = len(stripped) - len(stripped.lstrip("#"))
-            current_title = stripped.lstrip("#").strip()
+            current_title = stripped.lstrip("#").strip() or "未命名小节"
             continue
         current_lines.append(raw)
     flush()
 
-    if not sections:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            full = f.read()
-        return [{"title": "全文", "content": full}] if full.strip() else []
-    return [{"title": t, "content": c} for t, c in sections]
+    blocks: list[dict] = []
+    if sections:
+        for title, lines in sections:
+            blocks.extend(split_text_blocks("".join(lines), title=title))
+    else:
+        blocks.extend(split_text_blocks(text, title="全文"))
+    return blocks
 
 
-def _load_txt(file_path: str):
-    """txt:整篇返回。"""
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        full = f.read()
-    return [{"title": "全文", "content": full}] if full.strip() else []
+def _load_txt(path: Path) -> list[dict]:
+    return split_text_blocks(_read_text(path), title="全文")
+
+
+def _read_text(path: Path) -> str:
+    """中文文本常见编码兜底：utf-8-sig → utf-8 → gb18030。"""
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="ignore")
+
 
 def clean_raw_text(text: str) -> str:
-    """通用文本清洗：去页眉页脚、修断行、去参考文献等"""
+    """通用清洗：去零宽字符、断行连字符、页码行、多余空行。"""
     if not text:
         return ""
-    text = re.sub(r'-\n(? = [a-zA-Z])','',text)
-    text = re.sub(r'^\s*\d+\s*$','',text,flags=re.MULTILINE)
-    text = re.sub(r'[-=]{4,}', '', text)
-    text = re.sub(r'\n{3,}','\n\n',text)
-
+    text = _ZERO_WIDTH.sub("", text)
+    text = re.sub(r"(\w)-\n(?=[a-zA-Z])", r"\1", text)  # 英文断行连字符
+    text = _PAGE_NUMBER_LINE.sub("", text)
+    text = re.sub(r"[-=]{6,}", "", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
 
 if __name__ == "__main__":
     import sys
-    for p in sys.argv[1:]:
-        print(f"== {p} ==")
-        blocks = load_document(p)
-        print(f"  chunks: {len(blocks)}")
-        for t, c in blocks[:3]:
-            print(f"  - [{t}] {len(c)}字")
+
+    for argument in sys.argv[1:]:
+        print(f"== {argument} ==")
+        try:
+            parsed = load_document(argument)
+        except DocumentParseError as error:
+            print(f"  解析失败：{error}")
+            continue
+        print(f"  blocks: {len(parsed)}")
+        for block in parsed[:3]:
+            print(f"  - [p{block['page']}] {block['title']} ({len(block['content'])} 字)")

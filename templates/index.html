@@ -1,7 +1,10 @@
 <!DOCTYPE html>
 <html lang="zh">
 <head>
+    <meta charset="UTF-8">
+    <title>学术文献知识库</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
     <script>
     window.MathJax = {
         tex: {
@@ -12,11 +15,9 @@
         options: {
           skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
         }
-  };
-</script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
-    <meta charset="UTF-8">
-    <title>知识库</title>
+    };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -38,7 +39,7 @@
         .msg.user { justify-content: flex-end; }
         .bubble {
             max-width: 86%; padding: 12px 16px; border-radius: 16px; white-space: pre-wrap;
-            line-height: 1.6; font-size: 15px;
+            line-height: 1.6; font-size: 15px; overflow-wrap: anywhere;
         }
         .user .bubble { background: #0070f3; color: white; border-bottom-right-radius: 4px; }
         .ai .bubble { background: white; color: #222; border: 1px solid #e5e5e5; border-bottom-left-radius: 4px; }
@@ -68,12 +69,20 @@
         .url-bar .inp-grp { flex: 1; display: flex; gap: 8px; }
         .url-bar button.learn { background: #2e7d32; }
         .url-bar button.learn:hover { background: #1b5e20; }
-        .source { color: #0051cc; }
+        .doc-list { margin-top: 8px; }
+        .doc-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #e5e5e5; }
+        .doc-row:last-child { border-bottom: none; }
+        .doc-info { flex: 1; min-width: 0; }
+        .doc-name { font-weight: 600; word-break: break-all; }
+        .doc-meta { font-size: 12px; color: #888; margin-top: 2px; }
+        button.danger { padding: 4px 10px; font-size: 12px; background: #d32f2f; }
+        button.danger:hover { background: #b71c1c; }
+        .answer-img { max-height: 120px; border-radius: 8px; margin-top: 8px; border: 1px solid #ddd; }
     </style>
 </head>
 <body>
-    <h1>📚 智能知识库</h1>
-    <div class="subtitle">通用 RAG 知识库 ·<span id="currentUser"></span></div>
+    <h1>📚 学术文献知识库</h1>
+    <div class="subtitle">多租户 · 多模态 · 混合检索 · <span id="currentUser"></span></div>
 
     <div class="url-bar">
         <div class="inp-grp">
@@ -84,6 +93,8 @@
 
     <div class="toolbar">
         <span class="badge">已入库 {{ total_chunks }} 个知识块</span>
+        <button class="sec-btn" onclick="showDocuments()">📄 文档</button>
+        <button class="sec-btn" onclick="newThread()">＋ 新会话</button>
         <button class="sec-btn" onclick="logout()">退出</button>
         <span style="flex:1"></span>
         <button class="sec-btn" onclick="document.getElementById('anFile').click()">🔍 只分析不入库</button>
@@ -93,36 +104,47 @@
     </div>
 
     <div id="chat">
-        <div class="system-tip">把文档导入知识库，或让我联网学习某个网页，然后向我提问。试试"引用相关论文"或"这篇论文讲了什么"。</div>
+        <div class="system-tip">导入文献或联网学习网页后提问。支持图片问答；“文档”可查看并删除本账号的入库内容。</div>
     </div>
 
-    <!-- <div class="input-bar">
-        <textarea id="question" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行（如：引用 Transformer 相关论文 / 学习并总结这个小节）"></textarea>
-        <button id="submit" onclick="ask()">发送</button>
-    </div> -->
-        <!-- 图片预览区 -->
     <div id="imagePreview" style="display:none; padding: 10px; background: #fff; border-radius: 8px 8px 0 0; border-bottom: 1px solid #eee;">
-        <img id="previewImg" style="max-height: 80px; border-radius: 6px; border: 1px solid #ddd;">
+        <img id="previewImg" alt="待发送图片" style="max-height: 80px; border-radius: 6px; border: 1px solid #ddd;">
         <button onclick="clearImage()" style="padding: 4px 8px; font-size: 12px; background: #d32f2f; color: white; border: none; border-radius: 4px; margin-left: 10px; cursor: pointer;">移除</button>
     </div>
 
     <div class="input-bar">
-        <!-- 选图按钮 -->
         <button class="sec-btn" onclick="document.getElementById('imageFile').click()" style="background: #f0f0f0; color: #333; font-size: 20px; padding: 0 12px;">📷</button>
-        <input type="file" id="imageFile" accept="image/*" style="display:none" onchange="previewImage()">
-        
-        <textarea id="question" rows="2" placeholder="输入问题,Enter 发送（可附图片）"></textarea>
+        <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="previewImage()">
+        <textarea id="question" rows="2" placeholder="输入问题，Enter 发送（可附图片）"></textarea>
         <button id="submit" onclick="ask()">发送</button>
     </div>
 
     <script>
-        // 检查登录状态，未登录跳转到 /login
-        const token = localStorage.getItem("token");
-        if (!token) {
+        const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+        const MAX_UPLOAD_BYTES = 30 * 1024 * 1024;
+
+        if (!localStorage.getItem("token")) {
             window.location.href = "/login";
         }
 
-        // 统一的请求头
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            }[char]));
+        }
+
+        // 所有模型/文档内容渲染前必须经过这里：DOMPurify 缺失时退回纯文本
+        function renderMarkdown(text) {
+            const source = String(text ?? "");
+            if (!window.marked) return escapeHtml(source);
+            try {
+                const html = marked.parse(source);
+                return window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(source);
+            } catch (error) {
+                return escapeHtml(source);
+            }
+        }
+
         function authHeaders() {
             return {
                 "Content-Type": "application/json",
@@ -130,107 +152,145 @@
             };
         }
 
+        async function fetchWithAuth(url, options = {}) {
+            const token = localStorage.getItem("token");
+            if (!token) {
+                window.location.href = "/login";
+                return null;
+            }
+            options.headers = { ...(options.headers || {}), "Authorization": "Bearer " + token };
+            const resp = await fetch(url, options);
+            if (resp.status === 401) {
+                localStorage.removeItem("token");
+                window.location.href = "/login";
+                return null;
+            }
+            return resp;
+        }
 
-        const threadId = "web-" + Math.random().toString(36).slice(2, 10);
+        function getOrCreateThreadId() {
+            let id = localStorage.getItem("threadId");
+            if (!id) {
+                id = "web-" + Math.random().toString(36).slice(2, 10);
+                localStorage.setItem("threadId", id);
+            }
+            return id;
+        }
+
+        let threadId = getOrCreateThreadId();
         document.getElementById("currentUser").textContent =
-        "当前用户：" + (localStorage.getItem("username") || "未知");
+            "当前用户：" + (localStorage.getItem("username") || "未知");
 
-        let currentImageBase64 = null; // 当前上传的图片 base64
+        let currentImageBase64 = null;
+
+        function addMsg(role, text, useMarkdown = true) {
+            const chat = document.getElementById("chat");
+            const row = document.createElement("div");
+            row.className = "msg " + role;
+            const bubble = document.createElement("div");
+            bubble.className = "bubble";
+            bubble.innerHTML = useMarkdown ? renderMarkdown(text) : escapeHtml(text);
+            row.appendChild(bubble);
+            chat.appendChild(row);
+            chat.scrollTop = chat.scrollHeight;
+            return bubble;
+        }
+
+        function newThread() {
+            threadId = "web-" + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem("threadId", threadId);
+            document.getElementById("chat").innerHTML =
+                '<div class="system-tip">已开启新会话，历史上下文不会带入。</div>';
+        }
+
+        async function typeMath(bubble) {
+            if (window.MathJax && MathJax.typesetPromise) {
+                try { await MathJax.typesetPromise([bubble]); } catch (e) { /* 忽略公式渲染失败 */ }
+            }
+        }
+
+        async function refreshStats() {
+            try {
+                const resp = await fetchWithAuth("/stats", { headers: authHeaders() });
+                if (!resp) return;
+                const stats = await resp.json();
+                document.querySelector(".badge").textContent =
+                    "已入库 " + stats.total_chunks + " 个知识块 · " + stats.documents + " 篇文档";
+            } catch (e) { /* 忽略 */ }
+        }
 
         function previewImage() {
-            const file = document.getElementById("imageFile").files[0];
+            const input = document.getElementById("imageFile");
+            const file = input.files[0];
             if (!file) return;
+            if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+                alert("仅支持 PNG / JPEG / WebP 图片");
+                input.value = "";
+                return;
+            }
+            if (file.size > MAX_IMAGE_BYTES) {
+                alert("图片不能超过 10 MB");
+                input.value = "";
+                return;
+            }
             const reader = new FileReader();
-            reader.onload = function(e) {
-                currentImageBase64 = e.target.result; // 获取 base64 数据
+            reader.onload = (event) => {
+                currentImageBase64 = event.target.result;
                 document.getElementById("previewImg").src = currentImageBase64;
                 document.getElementById("imagePreview").style.display = "block";
-        };
+            };
             reader.readAsDataURL(file);
         }
 
         function clearImage() {
             currentImageBase64 = null;
             document.getElementById("imagePreview").style.display = "none";
-            document.getElementById("imageFile").value = ""; // 清空文件选择
+            document.getElementById("imageFile").value = "";
         }
 
         function logout() {
             localStorage.removeItem("token");
             localStorage.removeItem("username");
+            localStorage.removeItem("threadId");
             window.location.href = "/login";
         }
 
-
-        async function fetchWithAuth(url, options = {}) {
-            const token = localStorage.getItem("token");
-            if (!token) {
-                window.location.href = "/login";
-                return;
-            }
-            options.headers = {
-                ...options.headers,
-                "Authorization": "Bearer " + token
-            };
-            const resp = await fetch(url, options);
-
-            // 如果 token 过期（401），踢回登录页
-            if (resp.status === 401) {
-                localStorage.removeItem("token");
-                window.location.href = "/login";
-                return;
-            }
-            return resp;
-        }
-
-        function addMsg(role, text, isHtml) {
-            const chat = document.getElementById("chat");
-            const div = document.createElement("div");
-            div.className = "msg " + role;
-            const bubble = document.createElement("div");
-            bubble.className = "bubble";
-            if (isHtml) bubble.innerHTML = text;
-            else bubble.innerHTML = marked.parse(text);
-            div.appendChild(bubble);
-            chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
-            return bubble;
-        }
-
-        async function refreshStats() {
-            try {
-                const s = await (await fetchWithAuth('/stats', { headers: authHeaders() })).json();
-                document.querySelector('.badge').textContent = "已入库 " + s.total_chunks + " 个知识块";
-            } catch (e) {}
-        }
-
         async function learnUrl() {
-            const url = document.getElementById("learnUrl").value.trim();
+            const input = document.getElementById("learnUrl");
+            const url = input.value.trim();
             if (!url) return;
             addMsg("user", "📖 请联网学习：" + url);
-            const bubble = addMsg("ai", "正在抓取并入库，请稍候...", true);
+            const bubble = addMsg("ai", "正在抓取并入库，请稍候……");
             try {
                 const resp = await fetchWithAuth("/learn", {
                     method: "POST",
                     headers: authHeaders(),
                     body: JSON.stringify({ url }),
                 });
-                const d = await resp.json();
-                bubble.innerHTML = d.ok ? "✅ " + marked.parse(d.message) : "⚠️ " + d.message;
-                refreshStats();
-            } catch (e) {
-                bubble.innerHTML = "失败：" + e;
+                if (!resp) return;
+                const data = await resp.json().catch(() => ({}));
+                if (data.ok) {
+                    bubble.innerHTML = "✅ " + renderMarkdown(data.message);
+                    input.value = "";
+                    refreshStats();
+                } else {
+                    bubble.innerHTML = "⚠️ " + escapeHtml(data.detail || data.message || "学习失败");
+                }
+            } catch (error) {
+                bubble.innerHTML = "失败：" + escapeHtml(error);
             }
         }
 
         function renderAnalysis(analysis) {
             if (!analysis || !analysis.summary) return "";
-            let kw = (analysis.keywords || []).map(k => `<span class="kw">${k}</span>`).join(" ");
-            let cat = analysis.category ? `<span class="cat">${analysis.category}</span>` : "";
+            const keywords = (analysis.keywords || [])
+                .map((keyword) => `<span class="kw">${escapeHtml(keyword)}</span>`).join(" ");
+            const category = analysis.category
+                ? `<span class="cat">${escapeHtml(analysis.category)}</span>` : "";
             return `<div class="analysis-box">
                 <b>📄 智能分析</b>
-                <div style="margin-top:6px">${marked.parse(analysis.summary)}</div>
-                <div style="margin-top:8px">关键词：${kw || "—"} ${cat}</div>
+                <div style="margin-top:6px">${renderMarkdown(analysis.summary)}</div>
+                <div style="margin-top:8px">关键词：${keywords || "—"} ${category}</div>
             </div>`;
         }
 
@@ -238,19 +298,27 @@
             const input = document.getElementById("anFile");
             const file = input.files[0];
             if (!file) return;
-            const bubble = addMsg("ai", "正在分析文档（不入库）...", true);
-            const fd = new FormData();
-            fd.append('file', file);
+            if (file.size > MAX_UPLOAD_BYTES) { alert("文件不能超过 30 MB"); input.value = ""; return; }
+            const bubble = addMsg("ai", "正在分析文档（不入库）……");
+            const form = new FormData();
+            form.append("file", file);
             try {
-                const r = await fetchWithAuth("/analyze", { method: "POST", headers: { "Authorization": "Bearer " + localStorage.getItem("token") }, body: fd });
-                const d = await r.json();
-                bubble.innerHTML = renderAnalysis(d) || "无法分析该文档";
-                if (window.MathJax && MathJax.typesetPromise) {
-                    await MathJax.typesetPromise([bubble]);
+                const resp = await fetchWithAuth("/analyze", {
+                    method: "POST",
+                    headers: { "Authorization": "Bearer " + localStorage.getItem("token") },
+                    body: form,
+                });
+                if (!resp) return;
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    bubble.innerHTML = "失败：" + escapeHtml(data.detail || "文档分析失败");
+                } else {
+                    bubble.innerHTML = renderAnalysis(data) || "无法分析该文档";
+                    await typeMath(bubble);
                 }
                 input.value = "";
-            } catch (e) {
-                bubble.innerHTML = "失败：" + e;
+            } catch (error) {
+                bubble.innerHTML = "失败：" + escapeHtml(error);
             }
         }
 
@@ -258,77 +326,171 @@
             const input = document.getElementById("file");
             const files = input.files;
             if (!files.length) return;
-            addMsg("system", "正在上传、建立索引并分析，请稍候（可能需要几十秒）...", true);
-            let results = [];
+            addMsg("system", "正在上传、建立索引并分析，请稍候（大文件可能需要较长时间）……");
+            const results = [];
             for (const file of files) {
-                const fd = new FormData();
-                fd.append('file', file);
+                if (file.size > MAX_UPLOAD_BYTES) {
+                    results.push({ error: "文件超过 30 MB：" + file.name });
+                    continue;
+                }
+                const form = new FormData();
+                form.append("file", file);
                 try {
-                    const resp = await fetchWithAuth('/upload', { method: 'POST',headers: { "Authorization": "Bearer " + localStorage.getItem("token") }, body: fd });
-                    results.push(await resp.json());
-                } catch (e) {
-                    results.push({ error: '网络错误:' + e });
+                    const resp = await fetchWithAuth("/upload", {
+                        method: "POST",
+                        headers: { "Authorization": "Bearer " + localStorage.getItem("token") },
+                        body: form,
+                    });
+                    if (!resp) return;
+                    const data = await resp.json().catch(() => ({}));
+                    if (!resp.ok) data.error = data.detail || "上传失败";
+                    results.push(data);
+                } catch (error) {
+                    results.push({ error: "网络错误：" + error });
                 }
             }
-            let htmlOut = "";
-            for (const r of results) {
-                if (r.error) htmlOut += "❌ " + r.error + "<br>";
-                else {
-                    htmlOut += "✅ " + r.message + "<br>";
-                    htmlOut += renderAnalysis(r.analysis);
+            let html = "";
+            for (const result of results) {
+                if (result.error) {
+                    html += "❌ " + escapeHtml(result.error) + "<br>";
+                } else {
+                    html += "✅ " + escapeHtml(result.message) + "<br>";
+                    html += renderAnalysis(result.analysis);
                 }
             }
-            addMsg("ai", htmlOut, true);
-            const lastBubble = document.querySelector("#chat .msg:last-child .bubble");
-            if (window.MathJax && MathJax.typesetPromise) {
-                await MathJax.typesetPromise([lastBubble]);
-            }
-            input.value = '';
+            const bubble = addMsg("ai", "", false);
+            bubble.innerHTML = html;
+            await typeMath(bubble);
+            input.value = "";
             refreshStats();
+        }
+
+        async function showDocuments() {
+            const bubble = addMsg("ai", "正在加载文档列表……");
+            try {
+                const resp = await fetchWithAuth("/documents", { headers: authHeaders() });
+                if (!resp) return;
+                const data = await resp.json();
+                if (!resp.ok) {
+                    bubble.textContent = data.detail || "加载失败";
+                    return;
+                }
+                bubble.innerHTML = "";
+                const heading = document.createElement("div");
+                heading.innerHTML = "<b>📄 我的知识库</b>";
+                bubble.appendChild(heading);
+
+                if (!data.documents.length) {
+                    const empty = document.createElement("div");
+                    empty.className = "doc-meta";
+                    empty.textContent = "还没有入库文档，先上传或联网学习吧。";
+                    bubble.appendChild(empty);
+                    return;
+                }
+
+                const list = document.createElement("div");
+                list.className = "doc-list";
+                for (const doc of data.documents) {
+                    const row = document.createElement("div");
+                    row.className = "doc-row";
+
+                    const info = document.createElement("div");
+                    info.className = "doc-info";
+                    const name = document.createElement("div");
+                    name.className = "doc-name";
+                    name.textContent = doc.source;
+                    const meta = document.createElement("div");
+                    meta.className = "doc-meta";
+                    const pages = doc.page_start
+                        ? ` · p.${doc.page_start}-${doc.page_end}` : "";
+                    meta.textContent = `${doc.doc_type || "文档"} · ${doc.chunks} 块${pages} · ${(doc.modality || []).join("/")}`;
+                    info.append(name, meta);
+
+                    const remove = document.createElement("button");
+                    remove.className = "danger";
+                    remove.textContent = "删除";
+                    remove.onclick = async () => {
+                        if (!confirm(`确定删除「${doc.source}」及其向量索引？`)) return;
+                        remove.disabled = true;
+                        try {
+                            const response = await fetchWithAuth(
+                                "/documents?source=" + encodeURIComponent(doc.source),
+                                { method: "DELETE", headers: authHeaders() }
+                            );
+                            if (!response) return;
+                            if (!response.ok) {
+                                const payload = await response.json().catch(() => ({}));
+                                alert(payload.detail || "删除失败");
+                                return;
+                            }
+                            row.remove();
+                            refreshStats();
+                        } catch (error) {
+                            alert("删除失败：" + error);
+                        } finally {
+                            remove.disabled = false;
+                        }
+                    };
+
+                    row.append(info, remove);
+                    list.appendChild(row);
+                }
+                bubble.appendChild(list);
+            } catch (error) {
+                bubble.textContent = "加载失败：" + error;
+            }
         }
 
         async function ask() {
             const input = document.getElementById("question");
             const question = input.value.trim();
-            const btn = document.getElementById("submit");
-
+            const button = document.getElementById("submit");
             if (!question && !currentImageBase64) return;
 
-            let userMsgHtml = marked.parse(question || "请分析上传的图片");
+            const bubble = addMsg("user", question || "请分析上传的图片");
             if (currentImageBase64) {
-                userMsgHtml += `<br><img src="${currentImageBase64}" style="max-height: 120px; border-radius: 8px; margin-top: 8px; border: 1px solid #ddd;"></br>`;
+                const image = document.createElement("img");
+                image.src = currentImageBase64;
+                image.className = "answer-img";
+                image.alt = "上传的图片";
+                bubble.appendChild(image);
             }
 
-            addMsg("user", userMsgHtml, true);
             input.value = "";
-            btn.disabled = true;
-            const aiBubble = addMsg("ai", "思考中...", true);
+            button.disabled = true;
+            const aiBubble = addMsg("ai", "思考中……");
             try {
                 const resp = await fetchWithAuth("/ask", {
                     method: "POST",
                     headers: authHeaders(),
-                    body: JSON.stringify({ question: question || "请分析这张图片", thread_id: threadId, image_base64: currentImageBase64 }),
+                    body: JSON.stringify({
+                        question: question || "请分析这张图片",
+                        thread_id: threadId,
+                        image_base64: currentImageBase64,
+                    }),
                 });
+                if (!resp) return;
 
-                if(!resp.ok) {
-                    throw new Error("HTTP " + resp.status);
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    throw new Error(data.detail || data.error || ("HTTP " + resp.status));
                 }
-                const data = await resp.json();
-                aiBubble.innerHTML = marked.parse(data.answer);
-                if (window.MathJax && MathJax.typesetPromise) {
-                    await MathJax.typesetPromise([aiBubble]);
-                }
-                clearImage(); // 清除图片预览
-            } catch (e) {
-                aiBubble.innerHTML = "请求失败：" + e;
+                aiBubble.innerHTML = renderMarkdown(data.answer || "（空回答）");
+                await typeMath(aiBubble);
+                clearImage();
+            } catch (error) {
+                aiBubble.textContent = "请求失败：" + error;
             } finally {
-                btn.disabled = false;
+                button.disabled = false;
                 input.focus();
             }
         }
 
-        document.getElementById("question").addEventListener("keydown", (e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); }
+        document.getElementById("question").addEventListener("keydown", (event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                ask();
+            }
         });
 
         refreshStats();

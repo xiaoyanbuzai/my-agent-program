@@ -87,7 +87,7 @@ def tool_node(state:State):
         else:
             try:
                 result = fn(**call["args"])
-            except:
+            except Exception as e:
                 result = f"工具执行失败：{e}"
         outputs.append(ToolMessage(content = str(result),tool_call_id = call["id"]))
     return {"messages": outputs}
@@ -136,7 +136,7 @@ def summarize(state:State, config):
     # return {"messages":[llm.invoke([system] + recent)]}
 
 #   批判
-def critique(state:State):
+def critique(state:State, config):
     user_id = config["configurable"].get('user_id','default')
     context_parts = []
     for q in ["实验","方法","数据集","结论","局限性"]:

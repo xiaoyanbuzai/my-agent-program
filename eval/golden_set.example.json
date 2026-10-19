@@ -1,0 +1,14 @@
+[
+  {
+    "question": "这篇论文要解决的核心问题是什么？",
+    "expected_sources": ["neuraltexture.pdf"],
+    "expected_pages": [1],
+    "keywords": ["纹理", "三维"]
+  },
+  {
+    "question": "论文提出的方法包含哪些关键步骤？",
+    "expected_sources": ["neuraltexture.pdf"],
+    "expected_pages": [],
+    "keywords": ["方法"]
+  }
+]

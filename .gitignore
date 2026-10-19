@@ -10,6 +10,15 @@ knowledge/
 *.db
 *.db-shm
 *.db-wal
+*.part
+
+# 评测产物
+eval/report-*.json
+eval/*.local.json
+
+# 工具缓存
+.pytest_cache/
+.ruff_cache/
 
 # 临时测试脚本
 check.py

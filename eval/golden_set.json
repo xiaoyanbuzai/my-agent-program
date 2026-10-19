@@ -1,0 +1,38 @@
+[
+  {
+    "question": "论文采用的分而治之策略主要用来加速哪两个模块？",
+    "expected_sources": ["2.pdf"],
+    "expected_pages": [4, 45],
+    "keywords": ["纹理映射", "网格生成"]
+  },
+  {
+    "question": "三角网格模型分块时如何确定投影平面？",
+    "expected_sources": ["2.pdf"],
+    "expected_pages": [14],
+    "keywords": ["投影平面"]
+  },
+  {
+    "question": "稠密点云分块中为什么要保留重叠区域？",
+    "expected_sources": ["2.pdf"],
+    "expected_pages": [14],
+    "keywords": ["重叠"]
+  },
+  {
+    "question": "并行网格生成使用了什么表面重建算法？",
+    "expected_sources": ["2.pdf"],
+    "expected_pages": [27],
+    "keywords": ["泊松"]
+  },
+  {
+    "question": "并行纹理映射在分块数增加时加速比为什么可能下降？",
+    "expected_sources": ["2.pdf"],
+    "expected_pages": [38],
+    "keywords": ["重叠", "加载"]
+  },
+  {
+    "question": "论文指出分块算法有哪些局限？",
+    "expected_sources": ["2.pdf"],
+    "expected_pages": [45],
+    "keywords": ["PLY"]
+  }
+]

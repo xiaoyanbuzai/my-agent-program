@@ -1,236 +1,269 @@
-"""统一索引构建：解析文档 → 切块 → 写入用户隔离的向量库。"""
+"""统一索引构建：解析 → 父块/子块 → 写入租户隔离的向量库。
 
-import os
-import base64
-from zhipuai import ZhipuAI
-from dotenv import load_dotenv
-import re
+关键设计：
+- 父子块：子块（≤ CHILD_CHUNK_SIZE）参与向量/BM25 检索，父块截断后存入 metadata，
+  命中后按 parent_id 去重，避免把整章原文全部塞进上下文；
+- 溯源：每个块带 source / page / title / modality；
+- 一致替换：先写新块、成功后再删旧块，写失败时尽量回滚新块。
+"""
 
-load_dotenv()  # 从 .env 文件加载环境变量
+from __future__ import annotations
 
-# from pypdf import PdfReader
+import hashlib
+import logging
+import threading
+import time
+import uuid
+from pathlib import Path
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-import pymupdf
 
+from chunking import is_valid_chunk, split_by_chars, split_by_toc, truncate_text
+from config import BASE_DIR, get_settings
+from multimodal import MultimodalError, describe_image_bytes
+from uploads import sha256_file
 from vector_store import get_user_collection
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
+logger = logging.getLogger(__name__)
 
-def build_chunks(pdf_path: str):
-    """读取 PDF,返回 [{"title", "content"}, ...]。"""
-    doc = pymupdf.open(pdf_path)
-    toc = doc.get_toc()
+_INGEST_LOCKS: dict[int, threading.Lock] = {}
+_INGEST_LOCKS_GUARD = threading.Lock()
+_BATCH_SIZE = 500
 
-    if toc:
-        chunks = split_by_toc(doc,toc)
-    else:
-        chunks = split_by_chars(doc)
-    return chunks
 
-def split_by_chars(doc):
-    """无书签，全文按字符切"""
-    full_text = ""
-    for page in doc:
-        full_text += page.get_text()
-    
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=150,
-        separators=["\n\n", "\n", "。", " ", ""],
-    )
-    chunks = splitter.split_text(full_text)
-    return [{"title": "unknown", "content": c} for c in chunks]
+def _lock_for(user_id: int) -> threading.Lock:
+    with _INGEST_LOCKS_GUARD:
+        return _INGEST_LOCKS.setdefault(user_id, threading.Lock())
 
-    
-def split_by_toc(doc,toc):
-    """按一级章节(level 1)切块，每个章节一个块（太长则内部再切）。"""
-    chunks = []
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=150,
-        separators=["\n\n", "\n", "。", " ", ""],
+
+def _relative_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(BASE_DIR))
+    except ValueError:
+        return str(path.resolve())
+
+
+def _child_splitter() -> RecursiveCharacterTextSplitter:
+    settings = get_settings()
+    return RecursiveCharacterTextSplitter(
+        chunk_size=settings.child_chunk_size,
+        chunk_overlap=settings.child_chunk_overlap,
+        separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""],
     )
 
-    # level1 章节边界（页码为 PDF 中从 1 起始的页码）
-    level1 = [(title, page) for level, title, page in toc if level == 1]
-    if not level1:
-        # 没有一级标题则回退到全文按字符切
-        return split_by_chars(doc)
 
-    total_pages = doc.page_count
-    for i, (title, page_num) in enumerate(level1):
-        start_page = page_num - 1  # 转 0-based
-        end_page = (level1[i + 1][1] - 1) if i + 1 < len(level1) else total_pages
-        start_page = max(0, min(start_page, total_pages))
-        end_page = max(start_page, min(end_page, total_pages))
+def _load_blocks(
+    file_path: Path, doc_type: str, display_name: str
+) -> tuple[list[dict], bool]:
+    """返回 (blocks, is_image)。"""
+    settings = get_settings()
+    if doc_type in settings.allowed_image_exts:
+        data = file_path.read_bytes()
+        text = describe_image_bytes(data)
+        return (
+            [
+                {
+                    "title": f"图片：{display_name}",
+                    "content": text,
+                    "page": 0,
+                    "modality": "image",
+                }
+            ],
+            True,
+        )
 
-        text = ""
-        for page in range(start_page, end_page):
-            text += doc[page].get_text()
+    from kb_loader import load_document
 
-        # 章节太长，内部再切
-        if len(text) > 2000:
-            sub_chunks = splitter.split_text(text)
-            for j, sub in enumerate(sub_chunks):
-                chunks.append({
-                    "title": f"{title} (part {j+1})",
-                    "content": sub,
-                })
-        else:
-            chunks.append({
-                "title": title,
-                "content": text,
-            })
-    return chunks
+    blocks = load_document(str(file_path))
+    for block in blocks:
+        block.setdefault("modality", "text")
+        block.setdefault("page", 0)
+    return blocks, False
 
-def is_valid_chunk(text: str) -> str:
-    """判断切分出的子块是否有效（过滤太短或乱码的碎片）"""
-    text = text.strip()
 
-    if len(text) < 30:
-        return False
+def _add_in_batches(db, texts, metadatas, ids) -> None:
+    for start in range(0, len(texts), _BATCH_SIZE):
+        db.add_texts(
+            texts=texts[start : start + _BATCH_SIZE],
+            metadatas=metadatas[start : start + _BATCH_SIZE],
+            ids=ids[start : start + _BATCH_SIZE],
+        )
 
-    valid_chars =  len(re.findall(r'[\u4e00-\u9fa5a-zA-Z0-9]',text))
-    if len(text) >0 and (valid_chars / len(text)) < 0.4:
-        return False
 
-    return True
-
-def build_index(file_path: str, doc_name: str, doc_type: str , user_id: int) -> tuple[bool, str]:
+def build_index(
+    file_path: str,
+    doc_name: str,
+    doc_type: str,
+    user_id: int,
+) -> tuple[bool, str]:
     """把文档建成父子分块索引。
-    - 子块(Child)用于向量检索。
-    - 父块(Parent)存入 metadata,用于提供给大模型生成回答。
 
     Args:
-        file_path: 待入库文件路径(pdf/docx/md/txt)
-        doc_name:  文档显示名（通常取文件名）
-        doc_type:  文档类型标签，用于检索过滤，默认取自扩展名
-        user_id:  用户ID,用于隔离存储
+        file_path: 待入库文件路径(pdf/docx/md/txt/png/jpg/jpeg/webp)
+        doc_name: 文档显示名（通常取原始文件名）
+        doc_type: 文档类型标签（空则按扩展名推断）
+        user_id: 租户 ID,用于物理隔离
+
+    Returns:
+        (是否成功, 面向用户的提示)
     """
-    if not os.path.exists(file_path):
-        return False, f"文件不存在 {file_path}"
+    settings = get_settings()
+    if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
+        return False, "用户信息无效"
 
-    # 根据扩展名推断类型
-    if not doc_type:
-        doc_type = os.path.splitext(file_path)[1].lstrip(".").lower() or "doc"
+    path = Path(file_path)
+    if not path.is_file():
+        return False, f"文件不存在：{path.name}"
 
-    blocks = []
+    ext = (doc_type or path.suffix.lstrip(".")).lower().lstrip(".")
+    if ext not in settings.allowed_upload_exts:
+        return False, f"不支持的文件类型：{ext or '（无扩展名）'}"
 
-    if doc_type in ["png", "jpg", "jpeg","webp"]:
-        api_key = os.getenv("ZHIPU_API_KEY")
-        if not api_key:
-            return False, "未配置 ZHIPUAI_API_KEY,无法解析图片"
+    display_name = (doc_name or path.name).strip() or path.name
+    source = display_name
 
-        try:
-            with open(file_path, "rb") as f:
-                base64_data = base64.b64encode(f.read()).decode("utf-8")
-
-            client = ZhipuAI(api_key=f'{api_key}')
-            response = client.chat.completions.create(
-                model="glm-4.6v-flash",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type":"image_url","image_url":{"url":base64_data}},
-                        {"type":'text',"text":"请详细提取这张图片中的文字、公式或图表数据。请以 Markdown 格式输出，保留结构。"}]}],
-                        timeout=30
-            )
-            image_text = response.choices[0].message.content
-            blocks = [{"title":"图片解析内容","content":image_text}]
-        except Exception as e:
-            return False,f"图片识别失败:{e}"
-
-    else:
-        try:
-            from kb_loader import load_document
-            blocks = load_document(file_path)
-        except Exception as e:
-            return False, f"文档解析失败：{e}"
+    try:
+        blocks, is_image = _load_blocks(path, ext, display_name)
+    except MultimodalError as exc:
+        return False, str(exc)
+    except Exception:
+        logger.exception("文档解析失败：%s", path.name)
+        return False, "文档解析失败，请检查文件是否损坏或格式是否受支持"
 
     if not blocks:
-        return False, "文档或图片为空或无法解析"
+        return False, "文档为空或无法解析"
+
+    file_hash = sha256_file(path)
+    child_splitter = _child_splitter()
+    ingest_id = uuid.uuid4().hex[:10]
+    ingested_at = int(time.time())
+
+    child_texts: list[str] = []
+    child_metadatas: list[dict] = []
+    child_ids: list[str] = []
+    parent_count = 0
+
+    for block_index, block in enumerate(blocks):
+        parent_content = truncate_text(block["content"], settings.max_parent_chars)
+        if not parent_content:
+            continue
+        parent_count += 1
+        title = (block.get("title") or "正文").strip()
+        page = int(block.get("page") or 0)
+        modality = block.get("modality") or "text"
+        parent_id = hashlib.sha1(
+            f"{user_id}:{source}:{block_index}:{page}:{title}".encode("utf-8")
+        ).hexdigest()[:16]
+
+        children = [
+            child.strip()
+            for child in child_splitter.split_text(block["content"])
+            if child.strip()
+        ]
+        if not children:
+            children = [block["content"].strip()]
+
+        accepted = 0
+        for child_index, child in enumerate(children):
+            # 图片解析结果可能很短（例如图上只有一行字），不做长度门槛
+            if not is_image and not is_valid_chunk(child):
+                continue
+
+            child_texts.append(child)
+            child_metadatas.append(
+                {
+                    "user_id": int(user_id),
+                    "source": source,
+                    "doc_type": ext,
+                    "title": title,
+                    "page": page,
+                    "page_end": int(block.get("page_end") or page),
+                    "modality": modality,
+                    "parent_id": parent_id,
+                    "child_index": f"{block_index}_{child_index}",
+                    "parent_content": parent_content,
+                    "file_path": _relative_path(path),
+                    "file_hash": file_hash,
+                    "ingested_at": ingested_at,
+                }
+            )
+            child_ids.append(
+                f"{user_id}-{hashlib.sha1(source.encode('utf-8')).hexdigest()[:10]}"
+                f"-{ingest_id}-{block_index}-{child_index}"
+            )
+            accepted += 1
+
+        if accepted == 0:
+            # 极短但非空的块也要保留，否则整篇可能被丢光
+            child_texts.append(block["content"].strip())
+            child_metadatas.append(
+                {
+                    "user_id": int(user_id),
+                    "source": source,
+                    "doc_type": ext,
+                    "title": title,
+                    "page": page,
+                    "page_end": int(block.get("page_end") or page),
+                    "modality": modality,
+                    "parent_id": parent_id,
+                    "child_index": f"{block_index}_0",
+                    "parent_content": parent_content,
+                    "file_path": _relative_path(path),
+                    "file_hash": file_hash,
+                    "ingested_at": ingested_at,
+                }
+            )
+            child_ids.append(
+                f"{user_id}-{hashlib.sha1(source.encode('utf-8')).hexdigest()[:10]}"
+                f"-{ingest_id}-{block_index}-0"
+            )
+
+    if not child_texts:
+        return False, "没有提取到有效文本块"
 
     db = get_user_collection(user_id)
 
-    try:
-        existing = db.get(where={"source": doc_name})
-        if existing["ids"]:
-            db.delete(ids=existing["ids"])
+    with _lock_for(user_id):
+        try:
+            existing = db.get(where={"source": source}, include=["metadatas"])
+            old_ids = list(existing.get("ids") or [])
+        except Exception:
+            logger.exception("查询旧块失败(user_id=%s, source=%s)", user_id, source)
+            old_ids = []
 
-    except Exception as e:
-        pass
+        try:
+            _add_in_batches(db, child_texts, child_metadatas, child_ids)
+        except Exception:
+            logger.exception("写入向量库失败(user_id=%s, source=%s)", user_id, source)
+            # 尽量回滚本次已写入的块，避免与旧版本重复
+            try:
+                db.delete(ids=child_ids)
+            except Exception:
+                logger.exception("回滚新块失败(user_id=%s)", user_id)
+            return False, "写入向量库失败，请稍后重试或联系管理员"
 
-    child_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,
-        chunk_overlap=50,
-        separators=["\n\n", "\n", "。", " ", ""],
+        if old_ids:
+            try:
+                db.delete(ids=old_ids)
+            except Exception:
+                logger.exception("删除旧块失败(user_id=%s, source=%s)", user_id, source)
+
+    return (
+        True,
+        f"《{source}》已入库：{parent_count} 个父块，{len(child_texts)} 个子块({ext})",
     )
 
-    child_texts = []
-    child_metadatas = []
-    for i,block in enumerate(blocks):
-        parent_content = block["content"]
-        title = block.get("title", "") 
 
-        if(len(parent_content) < 1000):
-            children = [parent_content]
-        else:
-            children = child_splitter.split_text(parent_content)
-
-        for j,child_text in enumerate(children):
-            if not is_valid_chunk(child_text):
-                continue
-
-            child_texts.append(child_text)
-            child_metadatas.append({
-                "user_id": user_id,
-                "source": doc_name,
-                "doc_type": doc_type,
-                "title": title,
-                "child_index": f"{i}_{j}",
-                "parent_content": parent_content  # 截断存储，避免过长
-            })
-
-    if child_texts:
-        try:
-            db.add_texts(texts=child_texts, metadatas=child_metadatas)
-        except Exception as e:
-            return False, f"写入向量库失败：{e}"
-    else:
-        return False, "没有提取到有效文本块"
-
-    return True, f"《{doc_name}》已清洗入库包含 {len(blocks)} 个父块，{len(child_texts)} 个子块，类型 {doc_type})"
-   
-
-    # # 多格式解析（延迟导入避免与 kb_loader 循环依赖）
-    
-    # texts = [f"[{c['title']}]\n{c['content']}" for c in chunks]
-    # metadatas = [{"user_id": user_id, "source": doc_name, "doc_type": doc_type, "title": c.get("title", "")} for c in chunks]
-
-    # # 写入用户隔离的向量库
-    # try:
-    #     db = get_user_collection(user_id)
-    # except Exception as e:
-    #     return False, f"打开向量库失败：{e}"
-
-    # # 先删旧：同一文件重复上传时覆盖
-    # try:
-    #     existing = db.get(where={"source": doc_name})
-    #     if existing["ids"]:
-    #         db.delete(ids=existing["ids"])
-    # except Exception:
-    #     pass
-
-    # try:
-    #     db.add_texts(texts=texts, metadatas=metadatas)
-    # except Exception as e:
-    #     return False, f"写入向量库失败：{e}"
-
-    # return True, f"《{doc_name}》已入库（{len(chunks)} 个块，类型 {doc_type})"
+def delete_document(user_id: int, source: str) -> int:
+    """删除某文档的全部块，返回删除数量。"""
+    db = get_user_collection(user_id)
+    with _lock_for(user_id):
+        existing = db.get(where={"source": source}, include=["metadatas"])
+        ids = list(existing.get("ids") or [])
+        if ids:
+            db.delete(ids=ids)
+    return len(ids)
 
 
-# 兼容旧入口：保留 build_chunks 供教练/测试使用
-def build_index_legacy_pdf(pdf_path: str, paper_name: str):
-    return build_index(pdf_path, paper_name, "pdf")
+# 兼容旧代码的导出（新代码应直接从 chunking 导入）
+__all__ = ["build_index", "delete_document", "split_by_chars", "split_by_toc"]

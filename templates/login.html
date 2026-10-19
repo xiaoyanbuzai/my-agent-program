@@ -90,6 +90,14 @@
                 err.textContent = "请填写用户名和密码";
                 return;
             }
+            if (mode === "register" && username.length < 3) {
+                err.textContent = "用户名至少 3 个字符";
+                return;
+            }
+            if (mode === "register" && password.length < 8) {
+                err.textContent = "密码至少 8 个字符";
+                return;
+            }
 
             btn.disabled = true;
             err.textContent = "";
@@ -100,10 +108,14 @@
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({username, password}),
                 });
-                const data = await resp.json();
+                const data = await resp.json().catch(() => ({}));
 
-                if (data.error) {
-                    err.textContent = data.error;
+                if (!resp.ok || data.error) {
+                    err.textContent = data.error || data.detail || "请求失败，请重试";
+                    return;
+                }
+                if (!data.token) {
+                    err.textContent = "登录响应异常，请重试";
                     return;
                 }
 

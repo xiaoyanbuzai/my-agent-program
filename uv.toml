@@ -1,0 +1,9 @@
+# uv 项目配置（统一放在这里，避免与 pyproject.toml 的 [tool.uv] 重复）
+
+# 缓存目录：避免写入 C 盘（同时也绕开 C 盘缓存的权限问题）
+cache-dir = "F:/dsh/cache/uv"
+
+# 国内镜像
+[[index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
