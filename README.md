@@ -14,6 +14,8 @@
 | 可溯源引用 | 每个块带 `source / page / title`，检索结果输出 `[来源: 文件 p.页码]` | `indexer.py`、`kb_retriever.py` |
 | 联网学习 | URL 正文经 Jina Reader 提纯；arXiv PDF 下载后入库；SSRF / 大小 / 魔数校验 | `search_online.py` |
 | 文档管理 | 列出 / 删除本租户文档，同时清理向量与原始文件 | `documents.py` |
+| 会话历史 | 会话与消息持久化到 SQLite，按最近更新时间排序，支持新建 / 切换 / 删除 | `models.py`、`conversations.py`、`web_app.py` |
+| 个性背景 | 5 套内置暖色背景 + 用户上传图片；仅存浏览器本地，不占服务器 | `templates/index.html` |
 | 流式回答 | `POST /ask/stream` 返回 SSE，前端逐 token 渲染并保留引用格式 | `web_app.py`、`templates/index.html` |
 | 评测 | 金标准问题集，输出 hit@k / MRR / 页码命中 / 引用率 | `run_eval.py` |
 
@@ -24,7 +26,7 @@
         │  JWT (Authorization: Bearer)
         ▼
 FastAPI (web_app.py)
-   ├── /upload /analyze /learn /ask /ask/stream /documents ...
+   ├── /upload /analyze /learn /ask /ask/stream /documents /conversations ...
    ├── Agent 图 (LangGraph)：kb_search / arXiv / URL 学习 / 联网搜索
    ├── 鉴权 (auth.py) + 文档管理 (documents.py)
    └── 生命周期：SQLite checkpointer（会话） + SqliteStore（长期记忆）
@@ -95,6 +97,14 @@ uv run python scripts/reindex.py --rebuild
 - **图片入库**：`/upload` 支持图片，识别结果以 `modality=image` 入库，可被文本问题检索。
 - **扫描版 PDF**：文本层少于 50 字符时自动 OCR（默认最多前 20 页，`OCR_MAX_PAGES`），单页失败不会中断整篇。
 - **表格**：Word 表格转为 Markdown 入库，避免表格数据丢失。
+
+## 会话历史与界面
+
+- 每个账号的会话和消息写入 `conversations` / `chat_messages` 表，刷新或重新登录后仍在；
+- `GET /conversations` 按 `updated_at` 倒序返回，前端左侧栏按最近使用时间展示；
+- `POST /conversations` 新建对话，`GET /conversations/{id}/messages` 读取历史，`DELETE /conversations/{id}` 删除会话及其 checkpoint；
+- 首条用户消息自动作为会话标题；
+- 背景支持 5 套内置暖色主题和本地上传图片（自动压缩后存 `localStorage`，不上传服务器）。
 
 ## 流式输出（SSE）
 

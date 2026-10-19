@@ -2,136 +2,413 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
-    <title>登录 - 智能知识库</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 · 文献智库</title>
     <style>
+        :root {
+            --ink: #2d241b;
+            --muted: #8f7f6d;
+            --line: rgba(112, 82, 52, .15);
+            --brand: #c2410c;
+            --brand-deep: #9a3412;
+            --cream: #fffaf3;
+            --shadow: 0 30px 80px -34px rgba(92, 56, 28, .5);
+        }
         * { box-sizing: border-box; }
+        html, body { height: 100%; }
         body {
-            font-family: -apple-system, "Segoe UI", sans-serif;
-            background: #f9f9f9;
-            height: 100vh;
+            margin: 0;
+            color: var(--ink);
+            font-family: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, sans-serif;
+            background:
+                radial-gradient(1100px 620px at 8% 0%, #ffe0bf 0%, transparent 55%),
+                radial-gradient(900px 600px at 100% 4%, #ffd3dc 0%, transparent 52%),
+                linear-gradient(135deg, #fff8ee 0%, #f7f0ff 55%, #eef9f7 100%);
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(6px);
+            pointer-events: none;
+            opacity: .65;
+        }
+        .orb-one { width: 320px; height: 320px; left: -120px; bottom: -100px; background: radial-gradient(circle, #ffd7a8, transparent 68%); }
+        .orb-two { width: 380px; height: 380px; right: -140px; top: -120px; background: radial-gradient(circle, #ffc9d6, transparent 68%); }
+
+        .auth-shell {
+            position: relative;
+            z-index: 1;
+            width: min(1120px, 100%);
+            height: 100dvh;
+            margin: 0 auto;
+            padding: 24px;
+            display: grid;
+            grid-template-columns: 1.05fr .95fr;
+            gap: 18px;
+        }
+
+        .brand-panel {
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 48px;
+            border-radius: 30px;
+            background: linear-gradient(155deg, rgba(255, 252, 247, .9), rgba(255, 243, 232, .72));
+            border: 1px solid rgba(255, 255, 255, .7);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(20px);
+        }
+        .brand-panel::after {
+            content: "";
+            position: absolute;
+            width: 340px;
+            height: 340px;
+            right: -120px;
+            bottom: -140px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(234, 88, 12, .18), transparent 68%);
+        }
+        .brand-mark {
+            width: 52px;
+            height: 52px;
+            border-radius: 17px;
+            display: grid;
+            place-items: center;
+            color: #fff;
+            font-size: 24px;
+            background: linear-gradient(140deg, #f59e0b, #ea580c 55%, #be123c);
+            box-shadow: 0 16px 32px -14px rgba(190, 18, 60, .8);
+            margin-bottom: 28px;
+        }
+        .eyebrow {
+            margin: 0 0 14px;
+            color: var(--brand-deep);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+        .brand-panel h1 {
+            margin: 0;
+            font-size: clamp(32px, 4vw, 48px);
+            line-height: 1.18;
+            letter-spacing: -1.5px;
+            font-weight: 750;
+        }
+        .brand-panel h1 em {
+            font-style: normal;
+            background: linear-gradient(120deg, #ea580c, #be123c);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .lead {
+            max-width: 420px;
+            margin: 20px 0 0;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.9;
+        }
+        .feature-list {
+            display: grid;
+            gap: 13px;
+            margin: 34px 0 0;
+            padding: 0;
+            list-style: none;
+            max-width: 430px;
+        }
+        .feature-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 11px;
+            color: var(--ink-soft, #57483a);
+            font-size: 13px;
+            line-height: 1.65;
+        }
+        .feature-list li::before {
+            content: "✦";
+            flex: 0 0 auto;
+            width: 24px;
+            height: 24px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            color: var(--brand-deep);
+            background: rgba(194, 65, 12, .09);
+            font-size: 11px;
+        }
+        .feature-list strong { color: var(--ink); font-weight: 650; }
+        .brand-foot {
             display: flex;
             align-items: center;
+            gap: 10px;
+            margin-top: 38px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+        .brand-foot span:first-child {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #16a34a;
+            box-shadow: 0 0 0 4px rgba(22, 163, 74, .1);
+        }
+
+        .form-panel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
             justify-content: center;
-            margin: 0;
+            gap: 14px;
         }
-        .card {
-            background: white;
-            padding: 32px;
-            border-radius: 16px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-            width: 360px;
+        .form-card {
+            width: min(410px, 100%);
+            padding: 34px;
+            border-radius: 26px;
+            background: rgba(255, 252, 247, .86);
+            border: 1px solid rgba(255, 255, 255, .75);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(22px) saturate(1.05);
         }
-        h1 { font-size: 20px; margin: 0 0 24px; text-align: center; }
-        input {
+        .form-head h2 { margin: 0; font-size: 24px; letter-spacing: -.5px; }
+        .form-head p { margin: 7px 0 26px; color: var(--muted); font-size: 12.5px; }
+
+        .field { display: block; margin-bottom: 15px; }
+        .field-label {
+            display: block;
+            margin: 0 0 7px 3px;
+            color: var(--ink-soft, #57483a);
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        .field input {
             width: 100%;
-            padding: 12px;
-            font-size: 15px;
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            margin-bottom: 12px;
-            font-family: inherit;
+            padding: 13px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, .74);
+            color: var(--ink);
+            font-size: 14px;
+            outline: none;
+            transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
         }
-        input:focus { outline: none; border-color: #0070f3; }
-        button {
+        .field input::placeholder { color: #b3a392; }
+        .field input:focus {
+            border-color: rgba(194, 65, 12, .45);
+            background: #fff;
+            box-shadow: 0 0 0 4px rgba(194, 65, 12, .08);
+        }
+        .password-wrap { position: relative; }
+        .password-wrap input { padding-right: 58px; }
+        .password-toggle {
+            position: absolute;
+            right: 7px;
+            top: 50%;
+            transform: translateY(-50%);
+            padding: 5px 8px;
+            border-radius: 7px;
+            background: rgba(194, 65, 12, .07);
+            color: var(--brand-deep);
+            font-size: 10.5px;
+        }
+        .password-toggle:hover { background: rgba(194, 65, 12, .12); }
+
+        .submit {
             width: 100%;
-            padding: 12px;
-            background: #0070f3;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 15px;
-            cursor: pointer;
-            margin-top: 8px;
+            margin-top: 6px;
+            padding: 13px;
+            border-radius: 12px;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 650;
+            background: linear-gradient(135deg, #ea580c, #be123c);
+            box-shadow: 0 16px 30px -18px rgba(190, 18, 60, .8);
+            transition: transform .16s ease, box-shadow .16s ease;
         }
-        button:hover { background: #0051cc; }
-        button:disabled { background: #999; cursor: not-allowed; }
-        .switch {
+        .submit:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 20px 34px -18px rgba(190, 18, 60, .9); }
+        .submit:disabled { opacity: .6; cursor: not-allowed; }
+
+        .error {
+            min-height: 18px;
+            margin-top: 10px;
+            color: #be123c;
+            font-size: 11.5px;
             text-align: center;
-            margin-top: 16px;
-            font-size: 13px;
-            color: #666;
+            line-height: 1.5;
         }
-        .switch a { color: #0070f3; cursor: pointer; text-decoration: none; }
-        .error { color: #d32f2f; font-size: 13px; margin-top: 8px; text-align: center; min-height: 18px; }
+        .switch {
+            margin-top: 18px;
+            padding-top: 16px;
+            border-top: 1px solid var(--line);
+            text-align: center;
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .switch a {
+            margin-left: 3px;
+            color: var(--brand-deep);
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .switch a:hover { text-decoration: underline; }
+        .footnote {
+            margin: 0;
+            color: var(--muted);
+            font-size: 10.5px;
+            text-align: center;
+        }
+
+        @media (max-width: 880px) {
+            body { overflow: auto; }
+            .auth-shell {
+                grid-template-columns: 1fr;
+                height: auto;
+                min-height: 100dvh;
+                padding: 14px;
+                gap: 14px;
+            }
+            .brand-panel {
+                padding: 30px 26px;
+                border-radius: 24px;
+                min-height: 260px;
+            }
+            .brand-panel h1 { font-size: 30px; }
+            .lead { margin-top: 12px; }
+            .feature-list { display: none; }
+            .brand-foot { margin-top: 20px; }
+            .form-panel { padding: 8px 0 24px; }
+            .form-card { padding: 26px 22px; border-radius: 22px; }
+        }
     </style>
 </head>
 <body>
-    <div class="card">
-        <h1 id="title">登录</h1>
-        <input id="username" placeholder="用户名" autocomplete="username">
-        <input id="password" type="password" placeholder="密码" autocomplete="current-password">
-        <button id="submit" onclick="submitAuth()">登录</button>
-        <div class="error" id="error"></div>
-        <div class="switch">
-            <span id="switchText">没有账号？</span>
-            <a onclick="toggleMode()" id="switchLink">去注册</a>
+<div class="orb orb-one"></div>
+<div class="orb orb-two"></div>
+
+<div class="auth-shell">
+    <section class="brand-panel">
+        <div class="brand-mark">✦</div>
+        <p class="eyebrow">Literature Studio</p>
+        <h1>把文献读成<br><em>自己的知识</em></h1>
+        <p class="lead">面向学术文献的私人知识库。导入 PDF、图片或网页，用自然语言提问，得到带页码引用的回答。</p>
+        <ul class="feature-list">
+            <li><span><strong>多租户隔离</strong>：每个账号独立的向量库与知识目录。</span></li>
+            <li><span><strong>混合检索</strong>：向量 + BM25 + 精排，回答可回溯到页码。</span></li>
+            <li><span><strong>多模态输入</strong>：图片理解、扫描版 PDF OCR、网页学习。</span></li>
+        </ul>
+        <div class="brand-foot"><span></span>数据只保存在你的本机部署中</div>
+    </section>
+
+    <section class="form-panel">
+        <div class="form-card">
+            <div class="form-head">
+                <h2 id="title">欢迎回来</h2>
+                <p id="subtitle">登录后继续你的研究</p>
+            </div>
+
+            <label class="field">
+                <span class="field-label">用户名</span>
+                <input id="username" placeholder="输入用户名" autocomplete="username">
+            </label>
+            <label class="field">
+                <span class="field-label">密码</span>
+                <div class="password-wrap">
+                    <input id="password" type="password" placeholder="输入密码" autocomplete="current-password">
+                    <button class="password-toggle" type="button" id="togglePwd" onclick="togglePassword()">显示</button>
+                </div>
+            </label>
+
+            <button id="submit" class="submit" onclick="submitAuth()">登录</button>
+            <div class="error" id="error"></div>
+            <div class="switch">
+                <span id="switchText">没有账号？</span>
+                <a onclick="toggleMode()" id="switchLink">去注册</a>
+            </div>
         </div>
-    </div>
+        <p class="footnote">登录即表示你同意仅将本系统用于合法的学术研究用途</p>
+    </section>
+</div>
 
-    <script>
-        let mode = "login";   // login | register
+<script>
+    let mode = "login";   // login | register
 
-        function toggleMode() {
-            mode = mode === "login" ? "register" : "login";
-            document.getElementById("title").textContent = mode === "login" ? "登录" : "注册";
-            document.getElementById("submit").textContent = mode === "login" ? "登录" : "注册";
-            document.getElementById("switchText").textContent = mode === "login" ? "没有账号？" : "已有账号？";
-            document.getElementById("switchLink").textContent = mode === "login" ? "去注册" : "去登录";
-            document.getElementById("error").textContent = "";
+    function toggleMode() {
+        mode = mode === "login" ? "register" : "login";
+        document.getElementById("title").textContent = mode === "login" ? "欢迎回来" : "创建账号";
+        document.getElementById("subtitle").textContent = mode === "login"
+            ? "登录后继续你的研究"
+            : "建立属于你的文献空间";
+        document.getElementById("submit").textContent = mode === "login" ? "登录" : "注册";
+        document.getElementById("switchText").textContent = mode === "login" ? "没有账号？" : "已有账号？";
+        document.getElementById("switchLink").textContent = mode === "login" ? "去注册" : "去登录";
+        document.getElementById("error").textContent = "";
+    }
+
+    function togglePassword() {
+        const input = document.getElementById("password");
+        const button = document.getElementById("togglePwd");
+        const show = input.type === "password";
+        input.type = show ? "text" : "password";
+        button.textContent = show ? "隐藏" : "显示";
+    }
+
+    async function submitAuth() {
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+        const btn = document.getElementById("submit");
+        const err = document.getElementById("error");
+
+        if (!username || !password) {
+            err.textContent = "请填写用户名和密码";
+            return;
+        }
+        if (mode === "register" && username.length < 3) {
+            err.textContent = "用户名至少 3 个字符";
+            return;
+        }
+        if (mode === "register" && password.length < 8) {
+            err.textContent = "密码至少 8 个字符";
+            return;
         }
 
-        async function submitAuth() {
-            const username = document.getElementById("username").value.trim();
-            const password = document.getElementById("password").value;
-            const btn = document.getElementById("submit");
-            const err = document.getElementById("error");
+        btn.disabled = true;
+        err.textContent = "";
 
-            if (!username || !password) {
-                err.textContent = "请填写用户名和密码";
+        try {
+            const resp = await fetch("/" + mode, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({username, password}),
+            });
+            const data = await resp.json().catch(() => ({}));
+
+            if (!resp.ok || data.error) {
+                err.textContent = data.error || data.detail || "请求失败，请重试";
                 return;
             }
-            if (mode === "register" && username.length < 3) {
-                err.textContent = "用户名至少 3 个字符";
-                return;
-            }
-            if (mode === "register" && password.length < 8) {
-                err.textContent = "密码至少 8 个字符";
+            if (!data.token) {
+                err.textContent = "登录响应异常，请重试";
                 return;
             }
 
-            btn.disabled = true;
-            err.textContent = "";
-
-            try {
-                const resp = await fetch("/" + mode, {
-                    method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({username, password}),
-                });
-                const data = await resp.json().catch(() => ({}));
-
-                if (!resp.ok || data.error) {
-                    err.textContent = data.error || data.detail || "请求失败，请重试";
-                    return;
-                }
-                if (!data.token) {
-                    err.textContent = "登录响应异常，请重试";
-                    return;
-                }
-
-                localStorage.setItem("token", data.token);
-                localStorage.setItem("username", data.username);
-                window.location.href = "/";
-            } catch (e) {
-                err.textContent = "请求失败：" + e;
-            } finally {
-                btn.disabled = false;
-            }
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("username", data.username);
+            window.location.href = "/";
+        } catch (e) {
+            err.textContent = "请求失败：" + e;
+        } finally {
+            btn.disabled = false;
         }
+    }
 
-        document.getElementById("password").addEventListener("keydown", (e) => {
-            if (e.key === "Enter") submitAuth();
-        });
-    </script>
+    document.getElementById("password").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") submitAuth();
+    });
+</script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-"""ORM 模型：用户、文档、长期记忆。"""
+"""ORM 模型：用户、文档、长期记忆、会话与消息。"""
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Index
 from sqlalchemy.orm import relationship
@@ -15,6 +15,9 @@ class User(Base):
 
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="user", cascade="all, delete-orphan")
+    conversations = relationship(
+        "Conversation", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class Document(Base):
@@ -52,3 +55,38 @@ class Memory(Base):
     __table_args__ = (
         Index("ix_user_memkey", "user_id", "key", unique=True),
     )
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    thread_id = Column(String(64), unique=True, nullable=False, index=True)
+    title = Column(String(120), nullable=False, default="新对话")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True
+    )
+
+    user = relationship("User", back_populates="conversations")
+    messages = relationship(
+        "ChatMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.id",
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True)
+    conversation_id = Column(
+        Integer, ForeignKey("conversations.id"), nullable=False, index=True
+    )
+    role = Column(String(16), nullable=False)  # user / assistant
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    conversation = relationship("Conversation", back_populates="messages")

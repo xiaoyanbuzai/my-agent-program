@@ -47,7 +47,18 @@ from auth import (
     register_user,
 )
 from config import ensure_directories, get_settings, user_dir
-from db import get_db, init_db
+from conversations import (
+    ConversationNotFound,
+    append_message,
+    conversation_to_dict,
+    create_conversation as create_conversation_record,
+    delete_conversation as delete_conversation_record,
+    get_conversation,
+    list_conversations as list_conversation_records,
+    list_messages as list_conversation_messages,
+    thread_key,
+)
+from db import SessionLocal, get_db, init_db
 from documents import delete_document as remove_document
 from documents import list_documents
 from indexer import build_index
@@ -100,6 +111,7 @@ async def lifespan(app: FastAPI):
             SqliteStore.from_conn_string(str(settings.data_dir / "memory.db"))
         )
         app.state.graph = build_graph(checkpointer=checkpointer, store=store)
+        app.state.checkpointer = checkpointer
         logger.info(
             "应用启动：env=%s embedding=%s llm=%s",
             settings.app_env,
@@ -140,6 +152,7 @@ class State(TypedDict):
 class AskRequest(BaseModel):
     question: str = ""
     thread_id: str = "web-user"
+    conversation_id: int | None = None
     image_base64: str | None = None
 
 
@@ -621,7 +634,40 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _stream_answer(graph, final_question: str, config: dict):
+def _resolve_conversation(db: Session, user_id: int, conversation_id: int | None):
+    if conversation_id is None:
+        return None
+    try:
+        return get_conversation(db, user_id, conversation_id)
+    except ConversationNotFound:
+        raise HTTPException(status_code=404, detail="会话不存在") from None
+
+
+def _display_question(req: AskRequest, question: str) -> str:
+    if req.image_base64:
+        return f"[图片] {question}".strip() if question else "[图片提问]"
+    return question
+
+
+def _persist_assistant_message(user_id: int, conversation_id: int | None, content: str) -> None:
+    if not conversation_id or not content.strip():
+        return
+    try:
+        with SessionLocal() as session:
+            conversation = get_conversation(session, user_id, conversation_id)
+            append_message(session, conversation, "assistant", content)
+    except Exception:
+        logger.exception("保存助手消息失败（conversation_id=%s）", conversation_id)
+
+
+def _stream_answer(
+    graph,
+    final_question: str,
+    config: dict,
+    *,
+    user_id: int | None = None,
+    conversation_id: int | None = None,
+):
     """同步生成器：由 StreamingResponse 放到线程池迭代，兼容 SqliteSaver。"""
     pieces: list[str] = []
     try:
@@ -645,20 +691,80 @@ def _stream_answer(graph, final_question: str, config: dict):
     if not pieces:
         yield _sse({"type": "error", "message": "模型没有返回内容，请稍后重试"})
         return
-    yield _sse({"type": "done", "content": "".join(pieces)})
+
+    full_answer = "".join(pieces)
+    if user_id is not None:
+        _persist_assistant_message(user_id, conversation_id, full_answer)
+    yield _sse({"type": "done", "content": full_answer})
+
+
+@app.post("/conversations")
+async def create_conversation(
+    user_id: int = Depends(get_user_id), db: Session = Depends(get_db)
+):
+    conversation = create_conversation_record(db, user_id)
+    return {"conversation": conversation_to_dict(conversation, 0)}
+
+
+@app.get("/conversations")
+async def list_conversations(
+    user_id: int = Depends(get_user_id), db: Session = Depends(get_db)
+):
+    return {"conversations": list_conversation_records(db, user_id)}
+
+
+@app.get("/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id: int,
+    user_id: int = Depends(get_user_id),
+    db: Session = Depends(get_db),
+):
+    conversation = _resolve_conversation(db, user_id, conversation_id)
+    return {"messages": list_conversation_messages(db, conversation)}
+
+
+@app.delete("/conversations/{conversation_id}")
+async def remove_conversation(
+    conversation_id: int,
+    request: Request,
+    user_id: int = Depends(get_user_id),
+    db: Session = Depends(get_db),
+):
+    conversation = _resolve_conversation(db, user_id, conversation_id)
+    checkpoint_thread = thread_key(user_id, conversation)
+
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    delete_conversation_record(db, conversation)
+    if checkpointer is not None:
+        try:
+            checkpointer.delete_thread(checkpoint_thread)
+        except Exception:
+            logger.exception("删除会话 checkpoint 失败：%s", checkpoint_thread)
+    return {"ok": True}
 
 
 @app.post("/ask")
-async def ask(req: AskRequest, request: Request, user_id: int = Depends(get_user_id)):
+async def ask(
+    req: AskRequest,
+    request: Request,
+    user_id: int = Depends(get_user_id),
+    db: Session = Depends(get_db),
+):
     settings = get_settings()
     question = _validate_question(req, settings)
     final_question = await _build_final_question(req, question, settings)
+    conversation = _resolve_conversation(db, user_id, req.conversation_id)
+    display_question = _display_question(req, question)
+
+    if conversation is not None:
+        append_message(db, conversation, "user", display_question)
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
         raise HTTPException(status_code=503, detail="服务尚未就绪")
 
-    config = _ask_config(user_id, req.thread_id, settings)
+    raw_thread = conversation.thread_id if conversation else req.thread_id
+    config = _ask_config(user_id, raw_thread, settings)
     try:
         result = await run_in_threadpool(
             graph.invoke,
@@ -668,11 +774,16 @@ async def ask(req: AskRequest, request: Request, user_id: int = Depends(get_user
     except HTTPException:
         raise
     except Exception:
-        logger.exception("问答失败（user_id=%s）", user_id)
+        logger.exception("问答失败(user_id=%s)", user_id)
         raise HTTPException(status_code=503, detail="问答服务暂时不可用，请稍后重试") from None
 
-    answer = result["messages"][-1].content
-    return {"answer": _content_to_text(answer)}
+    answer = _content_to_text(result["messages"][-1].content)
+    if conversation is not None:
+        append_message(db, conversation, "assistant", answer)
+    return {
+        "answer": answer,
+        "conversation_id": conversation.id if conversation is not None else None,
+    }
 
 
 @app.post("/ask/stream")
@@ -680,18 +791,30 @@ async def ask_stream(
     req: AskRequest,
     request: Request,
     user_id: int = Depends(get_user_id),
+    db: Session = Depends(get_db),
 ):
     settings = get_settings()
     question = _validate_question(req, settings)
     final_question = await _build_final_question(req, question, settings)
+    conversation = _resolve_conversation(db, user_id, req.conversation_id)
+
+    if conversation is not None:
+        append_message(db, conversation, "user", _display_question(req, question))
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
         raise HTTPException(status_code=503, detail="服务尚未就绪")
 
-    config = _ask_config(user_id, req.thread_id, settings)
+    raw_thread = conversation.thread_id if conversation else req.thread_id
+    config = _ask_config(user_id, raw_thread, settings)
     return StreamingResponse(
-        _stream_answer(graph, final_question, config),
+        _stream_answer(
+            graph,
+            final_question,
+            config,
+            user_id=user_id,
+            conversation_id=conversation.id if conversation is not None else None,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -819,7 +942,7 @@ async def learn(req: LearnRequest, user_id: int = Depends(get_user_id)):
     except FetchError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except Exception:
-        logger.exception("网页学习失败（user_id=%s）", user_id)
+        logger.exception("网页学习失败(user_id=%s)", user_id)
         raise HTTPException(status_code=500, detail="学习失败，请稍后重试") from None
     return {"ok": ok, "message": message}
 
@@ -845,7 +968,7 @@ async def delete_document(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except Exception:
-        logger.exception("删除文档失败（user_id=%s, source=%s）", user_id, source)
+        logger.exception("删除文档失败(user_id=%s, source=%s)", user_id, source)
         raise HTTPException(status_code=500, detail="删除失败，请稍后重试") from None
     invalidate_cache(user_id)
     return {"ok": True, **result}
@@ -858,7 +981,7 @@ async def stats(user_id: int = Depends(get_user_id)):
         documents = await run_in_threadpool(list_documents, user_id)
         embedding_model = await run_in_threadpool(get_embedding_model_name)
     except Exception:
-        logger.exception("统计失败（user_id=%s）", user_id)
+        logger.exception("统计失败(user_id=%s)", user_id)
         raise HTTPException(status_code=500, detail="统计失败") from None
 
     return {
