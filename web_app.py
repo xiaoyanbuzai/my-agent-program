@@ -2,10 +2,10 @@
 
 分层约定：
 - 路由 / 鉴权 / Agent 编排在本文件；
-- 解析与入库在 kb_loader / indexer；
-- 混合检索在 kb_retriever；
-- 多模态在 multimodal；
-- 联网与安全抓取在 search_online；
+- 解析与入库在 kb_loader / indexer;
+- 混合检索在 kb_retriever;
+- 多模态在 multimodal;
+- 联网与安全抓取在 search_online;
 - 配置在 config。
 """
 
@@ -30,6 +30,7 @@ from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.config import get_config, get_store
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.store.sqlite import SqliteStore
@@ -264,7 +265,8 @@ def generate_paper_docx_tool(
         f"论文 Word 已生成：**《{title.strip() or '学术论文'}》**\n\n"
         f"[下载 .docx]({link})\n\n"
         f"文件：`{filename}`，已按中文论文格式排版（标题、作者/单位、摘要、关键词、"
-        f"章节标题、正文缩进、参考文献、页码）。"
+        f"章节标题、正文缩进、参考文献、页码）。\n\n"
+        "请直接把上面的下载链接回复给用户，不要再调用任何工具。"
     )
 
 
@@ -391,7 +393,16 @@ def web_news_tool(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _system_prompt(memory_text: str) -> str:
+def _is_paper_request(text: str) -> bool:
+    """识别“生成论文 doc / 导出 Word / 把 x.pdf 生成 doc”等意图。"""
+    lowered = (text or "").lower()
+    return bool(
+        re.search(r"(生成|导出|写|做|转成|整理).{0,12}(?:docx?(?!\w)|word|文档)", lowered)
+        or re.search(r"(论文|paper).{0,12}(?:docx?(?!\w)|word|文档)", lowered)
+    )
+
+
+def _system_prompt(memory_text: str, *, paper_mode: bool = False) -> str:
     base = (
         "你是一个严谨的学术文献知识库助手，服务于多租户知识库。\n\n"
         "【检索纪律】\n"
@@ -401,9 +412,9 @@ def _system_prompt(memory_text: str) -> str:
         "不得凭记忆编造文献结论、数字或链接。\n"
         "4. 需要外部文献时调用 search_papers_tool,只能使用它返回的真实标题与链接。\n"
         "5. 当用户要求“生成论文 doc / 导出 Word / 生成论文文档”时：先调用 kb_search_tool "
-        "检索依据，再调用 generate_paper_docx_tool；content 必须是完整论文 Markdown，"
+        "检索依据，再调用 generate_paper_docx_tool;content 必须是完整论文 Markdown,"
         "包含“# 标题、## 摘要、## 关键词、## 1 引言、……、## 参考文献”。"
-        "摘要控制在 200–300 字；正文不要出现“[来源: …]”这类知识库检索标记，"
+        "摘要控制在 200-300 字；正文不要出现“[来源: …]”这类知识库检索标记，"
         "需要引用时用 [1]、[2] 并在文末参考文献列出；作者/单位未知时留空，不要编造；"
         "生成后把工具返回的下载链接原样给用户。\n\n"
         "【引用规范】\n"
@@ -417,6 +428,13 @@ def _system_prompt(memory_text: str) -> str:
     )
     if memory_text:
         base += f"\n【该用户的历史对话摘要(仅供参考)】\n{memory_text}\n"
+    if paper_mode:
+        base += (
+            "\n【论文生成模式】\n"
+            "当前请求是生成论文文档。最多调用 2 次 kb_search_tool（一次可并行多个查询）；"
+            "随后必须调用 generate_paper_docx_tool。不要继续检索、不要重复生成；"
+            "工具成功返回下载链接后立即结束回答。\n"
+        )
     return base
 
 
@@ -496,7 +514,12 @@ def build_graph(checkpointer=None, store=None):
         except Exception:
             logger.exception("读取长期记忆失败(user_id=%s)", user_id)
 
-        system = {"role": "system", "content": _system_prompt(memory_text)}
+        system = {
+            "role": "system",
+            "content": _system_prompt(
+                memory_text, paper_mode=_is_paper_request(last_question)
+            ),
+        }
         try:
             response = llm_with_tools.invoke([system] + state["messages"])
         except Exception:
@@ -518,7 +541,7 @@ def build_graph(checkpointer=None, store=None):
                     },
                 )
         except Exception:
-            logger.exception("写入长期记忆失败（user_id=%s）", user_id)
+            logger.exception("写入长期记忆失败(user_id=%s)", user_id)
 
         return {"messages": [response]}
 
@@ -531,7 +554,14 @@ def build_graph(checkpointer=None, store=None):
                 result = f"错误：不存在名为 {call.get('name')} 的工具。"
             else:
                 try:
-                    result = function(**(call.get("args") or {}))
+                    arguments = call.get("args") or {}
+                    logger.info(
+                        "工具调用 user=%s name=%s args=%s",
+                        _current_user_id(),
+                        call.get("name"),
+                        str(arguments)[:500],
+                    )
+                    result = function(**arguments)
                 except Exception:
                     logger.exception("工具执行异常：%s", call.get("name"))
                     result = "工具执行失败，请稍后重试。"
@@ -568,7 +598,7 @@ async def register(req: AuthRequest, db: Session = Depends(get_db)):
         user = register_user(db, req.username, req.password)
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
-    logger.info("新用户注册：id=%s", user.id)
+    logger.info("新用户注册:id=%s", user.id)
     return {"token": create_token(user.id), "username": user.username}
 
 
@@ -742,6 +772,15 @@ def _stream_answer(
                 continue
             pieces.append(text)
             yield _sse({"type": "token", "content": text})
+    except GraphRecursionError:
+        logger.warning("问答步数超过上限（thread=%s）", config.get("configurable", {}).get("thread_id"))
+        yield _sse(
+            {
+                "type": "error",
+                "message": "检索或生成步骤过多，已停止。请缩小问题范围，或直接说“基于某篇文献生成论文 doc”。",
+            }
+        )
+        return
     except Exception:
         logger.exception("流式问答失败")
         yield _sse({"type": "error", "message": "回答生成失败，请稍后重试"})
@@ -832,6 +871,11 @@ async def ask(
         )
     except HTTPException:
         raise
+    except GraphRecursionError:
+        raise HTTPException(
+            status_code=503,
+            detail="检索或生成步骤过多，已停止。请缩小问题范围后重试。",
+        ) from None
     except Exception:
         logger.exception("问答失败(user_id=%s)", user_id)
         raise HTTPException(status_code=503, detail="问答服务暂时不可用，请稍后重试") from None

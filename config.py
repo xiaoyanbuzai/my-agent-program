@@ -272,7 +272,7 @@ def get_settings() -> Settings:
         hybrid_weight_vector=vector_weight,
         bm25_max_docs=_env_int("BM25_MAX_DOCS", 20000, minimum=100),
         memory_limit=_env_int("MEMORY_LIMIT", 3, minimum=0, maximum=20),
-        recursion_limit=_env_int("AGENT_RECURSION_LIMIT", 8, minimum=2, maximum=30),
+        recursion_limit=_env_int("AGENT_RECURSION_LIMIT", 24, minimum=2, maximum=60),
         fetch_timeout=_env_float("FETCH_TIMEOUT_SECONDS", 20.0),
         fetch_max_chars=_env_int("FETCH_MAX_CHARS", 8000, minimum=1000),
         fetch_max_mb=_env_int("FETCH_MAX_MB", 2, minimum=1, maximum=50),

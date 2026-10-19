@@ -120,6 +120,8 @@ uv run python scripts/reindex.py --rebuild
 
 下载链接需要 JWT；页面内点击时会由前端用 `fetch` 带 token 取回 blob 再下载。
 
+论文生成模式最多检索 2 次，随后必须生成文档；LangGraph 单轮步数默认 `AGENT_RECURSION_LIMIT=24`，避免“检索多轮后达到 8 步上限”。
+
 ## 流式输出（SSE）
 
 `POST /ask/stream` 与 `/ask` 参数完全一致，响应为 `text/event-stream`，事件格式：

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from web_app import _sse, _stream_answer
+from langgraph.errors import GraphRecursionError
+
+from web_app import _is_paper_request, _sse, _stream_answer
 
 
 class FakeGraph:
@@ -19,6 +21,11 @@ class FakeGraph:
 class BrokenGraph:
     def stream(self, payload, config, stream_mode):
         raise RuntimeError("boom")
+
+
+class RecursiveGraph:
+    def stream(self, payload, config, stream_mode):
+        raise GraphRecursionError("too many steps")
 
 
 def _decode(chunks):
@@ -41,6 +48,20 @@ def test_stream_reports_error():
     events = _decode(_stream_answer(BrokenGraph(), "问题", {}))
 
     assert events == [{"type": "error", "message": "回答生成失败，请稍后重试"}]
+
+
+def test_stream_reports_recursion_limit():
+    events = _decode(_stream_answer(RecursiveGraph(), "问题", {}))
+
+    assert events[0]["type"] == "error"
+    assert "步骤过多" in events[0]["message"]
+
+
+def test_paper_request_detection():
+    assert _is_paper_request("把 1.pdf 生成 1.doc")
+    assert _is_paper_request("基于知识库生成一篇论文 Word 文档")
+    assert _is_paper_request("export this paper as docx")
+    assert not _is_paper_request("这篇论文讲了什么？")
 
 
 def test_sse_payload_is_utf8_json():
