@@ -15,6 +15,7 @@
 | 联网学习 | URL 正文经 Jina Reader 提纯；arXiv PDF 下载后入库；SSRF / 大小 / 魔数校验 | `search_online.py` |
 | 文档管理 | 列出 / 删除本租户文档，同时清理向量与原始文件 | `documents.py` |
 | 会话历史 | 会话与消息持久化到 SQLite，按最近更新时间排序，支持新建 / 切换 / 删除 | `models.py`、`conversations.py`、`web_app.py` |
+| 论文 Word | 用户说“生成论文 doc / 导出 Word”时，检索知识库后按中文论文格式生成 `.docx` | `paper_writer.py`、`web_app.py` |
 | 个性背景 | 5 套内置暖色背景 + 用户上传图片；仅存浏览器本地，不占服务器 | `templates/index.html` |
 | 流式回答 | `POST /ask/stream` 返回 SSE，前端逐 token 渲染并保留引用格式 | `web_app.py`、`templates/index.html` |
 | 评测 | 金标准问题集，输出 hit@k / MRR / 页码命中 / 引用率 | `run_eval.py` |
@@ -26,8 +27,8 @@
         │  JWT (Authorization: Bearer)
         ▼
 FastAPI (web_app.py)
-   ├── /upload /analyze /learn /ask /ask/stream /documents /conversations ...
-   ├── Agent 图 (LangGraph)：kb_search / arXiv / URL 学习 / 联网搜索
+   ├── /upload /analyze /learn /ask /ask/stream /documents /conversations /papers ...
+   ├── Agent 图 (LangGraph)：kb_search / arXiv / URL 学习 / 联网搜索 / 论文 Word
    ├── 鉴权 (auth.py) + 文档管理 (documents.py)
    └── 生命周期：SQLite checkpointer（会话） + SqliteStore（长期记忆）
         │
@@ -105,6 +106,19 @@ uv run python scripts/reindex.py --rebuild
 - `POST /conversations` 新建对话，`GET /conversations/{id}/messages` 读取历史，`DELETE /conversations/{id}` 删除会话及其 checkpoint；
 - 首条用户消息自动作为会话标题；
 - 背景支持 5 套内置暖色主题和本地上传图片（自动压缩后存 `localStorage`，不上传服务器）。
+
+## 生成论文 Word
+
+当用户说“生成论文 doc / 导出 Word / 生成论文文档”时，Agent 会：
+
+1. 先调用 `kb_search_tool` 检索当前知识库；
+2. 把完整论文稿（Markdown）传给 `generate_paper_docx_tool`；
+3. 服务端用 `python-docx` 排版为 `.docx`，保存到 `knowledge/documents/<user_id>/papers/`；
+4. 回答里返回当前账号可下载的 `/papers/<文件名>` 链接。
+
+格式：A4 页面、标题黑体二号、作者/单位居中、摘要/关键词标签、章节标题黑体、正文宋体小四、1.5 倍行距、首行缩进 2 字符、参考文献悬挂缩进、页脚页码。正文中的 `[来源: …]` 会被清理，引用改用文末 `[1]`、`[2]`。
+
+下载链接需要 JWT；页面内点击时会由前端用 `fetch` 带 token 取回 blob 再下载。
 
 ## 流式输出（SSE）
 

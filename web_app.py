@@ -20,11 +20,11 @@ import time
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
@@ -72,6 +72,7 @@ from knowledge import analyze_document
 from logging_utils import setup_logging
 from models import User
 from multimodal import MultimodalError, describe_image_bytes
+from paper_writer import generate_paper_docx
 from search_online import (
     FetchError,
     download_binary,
@@ -221,6 +222,52 @@ def search_papers_tool(topic: str) -> str:
     return "\n\n".join(parts)
 
 
+def generate_paper_docx_tool(
+    title: str,
+    content: str,
+    author: str = "",
+    affiliation: str = "",
+) -> str:
+    """当用户明确要求“生成论文 doc / 导出 Word / 生成论文文档”时调用。
+
+    参数：
+    - title：论文标题；
+    - content：完整论文 Markdown，必须包含标题、摘要、关键词、正文各章节和参考文献；
+      正文不要带“[来源: …]”检索标记，文内引用改用 [1]、[2] 并在文末列出；
+    - author / affiliation：作者与单位，未知时留空，不要编造。
+
+    工具会把内容排成中文论文格式并保存为当前账号可下载的 .docx。
+    """
+    user_id = _current_user_id()
+    if user_id <= 0:
+        return "无法识别当前用户，请重新登录。"
+
+    if not (content or "").strip():
+        return "论文内容为空：请先根据知识库撰写完整论文正文，再调用本工具。"
+
+    try:
+        _, filename = generate_paper_docx(
+            user_id,
+            title=title,
+            content=content,
+            author=author,
+            affiliation=affiliation,
+        )
+    except ValueError as exc:
+        return f"论文生成失败：{exc}"
+    except Exception:
+        logger.exception("论文 Word 生成失败（user_id=%s）", user_id)
+        return "论文 Word 生成失败，请稍后重试。"
+
+    link = "/papers/" + quote(filename)
+    return (
+        f"论文 Word 已生成：**《{title.strip() or '学术论文'}》**\n\n"
+        f"[下载 .docx]({link})\n\n"
+        f"文件：`{filename}`，已按中文论文格式排版（标题、作者/单位、摘要、关键词、"
+        f"章节标题、正文缩进、参考文献、页码）。"
+    )
+
+
 def _learn_url(url: str, title: str, user_id: int) -> tuple[bool, str]:
     """抓取 URL 并入库；返回 (成功, 面向用户的提示)。"""
     try:
@@ -352,7 +399,13 @@ def _system_prompt(memory_text: str) -> str:
         "2. 如果本地结果不足、或用户明确要求最新信息，再调用 web_news_tool 补充。\n"
         "3. 如果工具返回“没有检索到”，必须明确说明“当前知识库与联网检索均未找到依据”，"
         "不得凭记忆编造文献结论、数字或链接。\n"
-        "4. 需要外部文献时调用 search_papers_tool,只能使用它返回的真实标题与链接。\n\n"
+        "4. 需要外部文献时调用 search_papers_tool,只能使用它返回的真实标题与链接。\n"
+        "5. 当用户要求“生成论文 doc / 导出 Word / 生成论文文档”时：先调用 kb_search_tool "
+        "检索依据，再调用 generate_paper_docx_tool；content 必须是完整论文 Markdown，"
+        "包含“# 标题、## 摘要、## 关键词、## 1 引言、……、## 参考文献”。"
+        "摘要控制在 200–300 字；正文不要出现“[来源: …]”这类知识库检索标记，"
+        "需要引用时用 [1]、[2] 并在文末参考文献列出；作者/单位未知时留空，不要编造；"
+        "生成后把工具返回的下载链接原样给用户。\n\n"
         "【引用规范】\n"
         "- 本地内容引用格式：[来源: 文件名 p.页码]\n"
         "- 联网内容引用格式：[来源: URL]\n"
@@ -405,7 +458,13 @@ def _load_memory_text(memory_store, user_id: int, question: str, limit: int) -> 
 
 def build_graph(checkpointer=None, store=None):
     settings = get_settings()
-    tools = [kb_search_tool, search_papers_tool, learn_from_url_tool, web_news_tool]
+    tools = [
+        kb_search_tool,
+        search_papers_tool,
+        learn_from_url_tool,
+        web_news_tool,
+        generate_paper_docx_tool,
+    ]
     tool_map = {tool.__name__: tool for tool in tools}
 
     llm = ChatOpenAI(
@@ -972,6 +1031,27 @@ async def delete_document(
         raise HTTPException(status_code=500, detail="删除失败，请稍后重试") from None
     invalidate_cache(user_id)
     return {"ok": True, **result}
+
+
+@app.get("/papers/{filename}")
+async def download_paper(filename: str, user_id: int = Depends(get_user_id)):
+    directory = (user_dir("documents", user_id) / "papers").resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    candidate = (directory / filename).resolve()
+    try:
+        candidate.relative_to(directory)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在") from None
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(
+        candidate,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
+        filename=candidate.name,
+    )
 
 
 @app.get("/stats")

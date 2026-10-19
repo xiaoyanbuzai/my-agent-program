@@ -1664,6 +1664,36 @@
         }
     });
 
+    // 论文下载链接需要带 JWT，浏览器直接点链接不会带 Authorization，改为 fetch + blob。
+    document.addEventListener("click", async (event) => {
+        const link = event.target.closest ? event.target.closest("a[href^='/papers/']") : null;
+        if (!link) return;
+        event.preventDefault();
+        try {
+            const resp = await fetchWithAuth(link.getAttribute("href"));
+            if (!resp) return;
+            if (!resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                throw new Error(data.detail || "下载失败");
+            }
+            const blob = await resp.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = objectUrl;
+            const disposition = resp.headers.get("content-disposition") || "";
+            const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+            anchor.download = match
+                ? decodeURIComponent(match[1])
+                : (link.getAttribute("href") || "paper.docx").split("/").pop();
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+        } catch (error) {
+            alert("下载论文失败：" + error.message);
+        }
+    });
+
     applyWallpaper(loadWallpaper());
     document.getElementById("currentUser").textContent =
         localStorage.getItem("username") || "访客";
