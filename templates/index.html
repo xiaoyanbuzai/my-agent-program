@@ -2,13 +2,26 @@
 <html lang="zh">
 <head>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+    window.MathJax = {
+        tex: {
+            inlineMath: [['$', '$'], ['\\(', '\\)']],
+            displayMath: [['$$', '$$'], ['\\[', '\\]']]
+        },
+        svg: { fontCache: 'global' },
+        options: {
+          skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+        }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
     <meta charset="UTF-8">
-    <title>文献 Agent</title>
+    <title>知识库</title>
     <style>
         * { box-sizing: border-box; }
         body {
             font-family: -apple-system, "Segoe UI", sans-serif;
-            max-width: 820px;
+            max-width: 860px;
             margin: 0 auto;
             padding: 20px;
             background: #f9f9f9;
@@ -16,194 +29,296 @@
             display: flex;
             flex-direction: column;
         }
-        h1 { font-size: 20px; margin: 0 0 12px; }
-        .paper-bar {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 12px;
-        }
-        .paper-bar label { font-size: 14px; color: #666; }
-        select {
-            flex: 1;
-            padding: 8px;
-            font-size: 14px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-        }
-        #chat {
-            flex: 1;
-            overflow-y: auto;
-            padding: 12px 0;
-        }
-        .msg {
-            display: flex;
-            margin-bottom: 16px;
-        }
+        h1 { font-size: 20px; margin: 0; }
+        .subtitle { font-size: 13px; color: #888; margin: 4px 0 12px; }
+        .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+        .badge { font-size: 12px; background: #eef4ff; color: #0051cc; border-radius: 20px; padding: 4px 10px; }
+        #chat { flex: 1; overflow-y: auto; padding: 12px 0; }
+        .msg { display: flex; margin-bottom: 16px; }
         .msg.user { justify-content: flex-end; }
         .bubble {
-            max-width: 80%;
-            padding: 12px 16px;
-            border-radius: 16px;
-            white-space: pre-wrap;
-            line-height: 1.6;
-            font-size: 15px;
+            max-width: 86%; padding: 12px 16px; border-radius: 16px; white-space: pre-wrap;
+            line-height: 1.6; font-size: 15px;
         }
-        .user .bubble {
-            background: #0070f3;
-            color: white;
-            border-bottom-right-radius: 4px;
+        .user .bubble { background: #0070f3; color: white; border-bottom-right-radius: 4px; }
+        .ai .bubble { background: white; color: #222; border: 1px solid #e5e5e5; border-bottom-left-radius: 4px; }
+        .system-tip { text-align: center; color: #999; font-size: 13px; margin: 20px 0; }
+        .analysis-box {
+            background: #f2f7ff; border: 1px solid #d6e4ff; border-radius: 10px;
+            padding: 12px; margin: 8px 0; font-size: 14px;
         }
-        .ai .bubble {
-            background: white;
-            color: #222;
-            border: 1px solid #e5e5e5;
-            border-bottom-left-radius: 4px;
-        }
-        .system-tip {
-            text-align: center;
-            color: #999;
-            font-size: 13px;
-            margin: 20px 0;
-        }
-        .input-bar {
-            display: flex;
-            gap: 8px;
-            padding-top: 12px;
-            border-top: 1px solid #e5e5e5;
-        }
+        .kw { display: inline-block; background: #e0ecff; color: #0051cc; border-radius: 12px; padding: 2px 10px; margin: 2px; font-size: 12px; }
+        .cat { display: inline-block; background: #e8f5e9; color: #2e7d32; border-radius: 6px; padding: 2px 8px; font-size: 12px; }
+        .input-bar { display: flex; gap: 8px; padding-top: 12px; border-top: 1px solid #e5e5e5; }
         textarea {
-            flex: 1;
-            padding: 12px;
-            font-size: 15px;
-            border: 1px solid #ddd;
-            border-radius: 12px;
-            resize: none;
-            font-family: inherit;
+            flex: 1; padding: 12px; font-size: 15px; border: 1px solid #ddd;
+            border-radius: 12px; resize: none; font-family: inherit;
         }
         button {
-            padding: 0 24px;
-            background: #0070f3;
-            color: white;
-            border: none;
-            border-radius: 12px;
-            font-size: 15px;
-            cursor: pointer;
+            padding: 0 20px; background: #0070f3; color: white; border: none;
+            border-radius: 12px; font-size: 15px; cursor: pointer; white-space: nowrap;
         }
         button:hover { background: #0051cc; }
         button:disabled { background: #999; cursor: not-allowed; }
+        input[type="file"] { display: none; }
+        .sec-btn { padding: 0 12px; background: #407fe0; font-size: 13px; }
+        .sec-btn:hover { background: #2f67c4; }
+        .url-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+        .url-bar input[type="text"] { flex: 1; padding: 8px 12px; font-size: 14px; border: 1px solid #ddd; border-radius: 8px; }
+        .url-bar .inp-grp { flex: 1; display: flex; gap: 8px; }
+        .url-bar button.learn { background: #2e7d32; }
+        .url-bar button.learn:hover { background: #1b5e20; }
+        .source { color: #0051cc; }
     </style>
 </head>
 <body>
-    <h1>文献 Agent</h1>
-    <div class="paper-bar">
-        <label>论文：</label>
-        <select id="paper" onchange="clearChat()">
-            {% for p in papers %}
-            <option value="{{ p }}">{{ p }}</option>
-            {% endfor %}
-        </select>
-    <input type="file" id="pdfFile" accept=".pdf" style="display:none" onchange="uploadPdf()">
-    <button onclick="document.getElementById('pdfFile').click()" style="padding: 6px 12px; font-size: 13px; background: #666;">上传 PDF</button>
+    <h1>📚 智能知识库</h1>
+    <div class="subtitle">通用 RAG 知识库 ·<span id="currentUser"></span></div>
+
+    <div class="url-bar">
+        <div class="inp-grp">
+            <input type="text" id="learnUrl" placeholder="粘贴网页链接，让知识库联网学习并入库（如 arXiv / 博客全文页）">
+            <button class="learn" onclick="learnUrl()">学习</button>
+        </div>
     </div>
 
-    <div id="chat"></div>
+    <div class="toolbar">
+        <span class="badge">已入库 {{ total_chunks }} 个知识块</span>
+        <button class="sec-btn" onclick="logout()">退出</button>
+        <span style="flex:1"></span>
+        <button class="sec-btn" onclick="document.getElementById('anFile').click()">🔍 只分析不入库</button>
+        <input type="file" id="anFile" accept=".pdf,.docx,.txt,.md,.markdown" onchange="analyzeOnly()">
+        <button class="sec-btn" onclick="document.getElementById('file').click()">+ 导入并分析</button>
+        <input type="file" id="file" accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg" multiple onchange="uploadFiles()">
+    </div>
+
+    <div id="chat">
+        <div class="system-tip">把文档导入知识库，或让我联网学习某个网页，然后向我提问。试试"引用相关论文"或"这篇论文讲了什么"。</div>
+    </div>
+
+    <!-- <div class="input-bar">
+        <textarea id="question" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行（如：引用 Transformer 相关论文 / 学习并总结这个小节）"></textarea>
+        <button id="submit" onclick="ask()">发送</button>
+    </div> -->
+        <!-- 图片预览区 -->
+    <div id="imagePreview" style="display:none; padding: 10px; background: #fff; border-radius: 8px 8px 0 0; border-bottom: 1px solid #eee;">
+        <img id="previewImg" style="max-height: 80px; border-radius: 6px; border: 1px solid #ddd;">
+        <button onclick="clearImage()" style="padding: 4px 8px; font-size: 12px; background: #d32f2f; color: white; border: none; border-radius: 4px; margin-left: 10px; cursor: pointer;">移除</button>
+    </div>
 
     <div class="input-bar">
-        <textarea id="question" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
+        <!-- 选图按钮 -->
+        <button class="sec-btn" onclick="document.getElementById('imageFile').click()" style="background: #f0f0f0; color: #333; font-size: 20px; padding: 0 12px;">📷</button>
+        <input type="file" id="imageFile" accept="image/*" style="display:none" onchange="previewImage()">
+        
+        <textarea id="question" rows="2" placeholder="输入问题,Enter 发送（可附图片）"></textarea>
         <button id="submit" onclick="ask()">发送</button>
     </div>
 
     <script>
-        const threadId = "web-" + Math.random().toString(36).slice(2, 10);
-
-        async function uploadPdf(){
-            const fileInput = document.getElementById('pdfFile');
-            const file = fileInput.files[0]
-            if(!file) return;
-
-            const chat = document.getElementById("chat");
-            const tip = document.createElement('div')
-            tip.className = 'system-tip'
-            tip.textContent = "正在上传并建立索引，请稍候（可能需要几十秒）...";
-            chat.appendChild(tip)
-            chat.scrollTop = chat.scrollHeight;
-
-            const formData = new FormData();
-            formData.append('file',file);
-
-            try{
-                const resp = await fetch('/upload',{method:'POST',body:formData})
-                const data = await resp.json()
-
-                if(data.error){
-                    tip.textContent = '上传失败:' + data.error;
-                    return;
-                }
-
-                tip.textContent = data.message;
-
-                const select = document.getElementById('paper');
-                const option = document.createElement('option');
-                option.value = data.paper;
-                option.textContent = data.paper;
-                select.appendChild(option);
-                select.value = data.paper;
-
-            }catch(e){
-                tip.textContent = '上传失败' + e;
-            }finally{
-                fileInput.value = '';
-            }
+        // 检查登录状态，未登录跳转到 /login
+        const token = localStorage.getItem("token");
+        if (!token) {
+            window.location.href = "/login";
         }
 
-        function addMsg(role, text) {
+        // 统一的请求头
+        function authHeaders() {
+            return {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + localStorage.getItem("token"),
+            };
+        }
+
+
+        const threadId = "web-" + Math.random().toString(36).slice(2, 10);
+        document.getElementById("currentUser").textContent =
+        "当前用户：" + (localStorage.getItem("username") || "未知");
+
+        let currentImageBase64 = null; // 当前上传的图片 base64
+
+        function previewImage() {
+            const file = document.getElementById("imageFile").files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                currentImageBase64 = e.target.result; // 获取 base64 数据
+                document.getElementById("previewImg").src = currentImageBase64;
+                document.getElementById("imagePreview").style.display = "block";
+        };
+            reader.readAsDataURL(file);
+        }
+
+        function clearImage() {
+            currentImageBase64 = null;
+            document.getElementById("imagePreview").style.display = "none";
+            document.getElementById("imageFile").value = ""; // 清空文件选择
+        }
+
+        function logout() {
+            localStorage.removeItem("token");
+            localStorage.removeItem("username");
+            window.location.href = "/login";
+        }
+
+
+        async function fetchWithAuth(url, options = {}) {
+            const token = localStorage.getItem("token");
+            if (!token) {
+                window.location.href = "/login";
+                return;
+            }
+            options.headers = {
+                ...options.headers,
+                "Authorization": "Bearer " + token
+            };
+            const resp = await fetch(url, options);
+
+            // 如果 token 过期（401），踢回登录页
+            if (resp.status === 401) {
+                localStorage.removeItem("token");
+                window.location.href = "/login";
+                return;
+            }
+            return resp;
+        }
+
+        function addMsg(role, text, isHtml) {
             const chat = document.getElementById("chat");
             const div = document.createElement("div");
             div.className = "msg " + role;
             const bubble = document.createElement("div");
             bubble.className = "bubble";
-            // bubble.textContent = text;
-            bubble.innerHTML = marked.parse(text);
+            if (isHtml) bubble.innerHTML = text;
+            else bubble.innerHTML = marked.parse(text);
             div.appendChild(bubble);
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
             return bubble;
         }
 
-        function clearChat() {
-            const chat = document.getElementById("chat");
-            chat.innerHTML = "";
+        async function refreshStats() {
+            try {
+                const s = await (await fetchWithAuth('/stats', { headers: authHeaders() })).json();
+                document.querySelector('.badge').textContent = "已入库 " + s.total_chunks + " 个知识块";
+            } catch (e) {}
+        }
 
-            const paper = document.getElementById("paper").value;
-            const tip = document.createElement("div");
-            tip.className = "system-tip";
-            tip.textContent = "—— 已切换到论文：" + paper + " ——";
-            chat.appendChild(tip);
+        async function learnUrl() {
+            const url = document.getElementById("learnUrl").value.trim();
+            if (!url) return;
+            addMsg("user", "📖 请联网学习：" + url);
+            const bubble = addMsg("ai", "正在抓取并入库，请稍候...", true);
+            try {
+                const resp = await fetchWithAuth("/learn", {
+                    method: "POST",
+                    headers: authHeaders(),
+                    body: JSON.stringify({ url }),
+                });
+                const d = await resp.json();
+                bubble.innerHTML = d.ok ? "✅ " + marked.parse(d.message) : "⚠️ " + d.message;
+                refreshStats();
+            } catch (e) {
+                bubble.innerHTML = "失败：" + e;
+            }
+        }
+
+        function renderAnalysis(analysis) {
+            if (!analysis || !analysis.summary) return "";
+            let kw = (analysis.keywords || []).map(k => `<span class="kw">${k}</span>`).join(" ");
+            let cat = analysis.category ? `<span class="cat">${analysis.category}</span>` : "";
+            return `<div class="analysis-box">
+                <b>📄 智能分析</b>
+                <div style="margin-top:6px">${marked.parse(analysis.summary)}</div>
+                <div style="margin-top:8px">关键词：${kw || "—"} ${cat}</div>
+            </div>`;
+        }
+
+        async function analyzeOnly() {
+            const input = document.getElementById("anFile");
+            const file = input.files[0];
+            if (!file) return;
+            const bubble = addMsg("ai", "正在分析文档（不入库）...", true);
+            const fd = new FormData();
+            fd.append('file', file);
+            try {
+                const r = await fetchWithAuth("/analyze", { method: "POST", headers: { "Authorization": "Bearer " + localStorage.getItem("token") }, body: fd });
+                const d = await r.json();
+                bubble.innerHTML = renderAnalysis(d) || "无法分析该文档";
+                if (window.MathJax && MathJax.typesetPromise) {
+                    await MathJax.typesetPromise([bubble]);
+                }
+                input.value = "";
+            } catch (e) {
+                bubble.innerHTML = "失败：" + e;
+            }
+        }
+
+        async function uploadFiles() {
+            const input = document.getElementById("file");
+            const files = input.files;
+            if (!files.length) return;
+            addMsg("system", "正在上传、建立索引并分析，请稍候（可能需要几十秒）...", true);
+            let results = [];
+            for (const file of files) {
+                const fd = new FormData();
+                fd.append('file', file);
+                try {
+                    const resp = await fetchWithAuth('/upload', { method: 'POST',headers: { "Authorization": "Bearer " + localStorage.getItem("token") }, body: fd });
+                    results.push(await resp.json());
+                } catch (e) {
+                    results.push({ error: '网络错误:' + e });
+                }
+            }
+            let htmlOut = "";
+            for (const r of results) {
+                if (r.error) htmlOut += "❌ " + r.error + "<br>";
+                else {
+                    htmlOut += "✅ " + r.message + "<br>";
+                    htmlOut += renderAnalysis(r.analysis);
+                }
+            }
+            addMsg("ai", htmlOut, true);
+            const lastBubble = document.querySelector("#chat .msg:last-child .bubble");
+            if (window.MathJax && MathJax.typesetPromise) {
+                await MathJax.typesetPromise([lastBubble]);
+            }
+            input.value = '';
+            refreshStats();
         }
 
         async function ask() {
-            const paper = document.getElementById("paper").value;
             const input = document.getElementById("question");
             const question = input.value.trim();
             const btn = document.getElementById("submit");
 
-            if (!question) return;
+            if (!question && !currentImageBase64) return;
 
-            addMsg("user", question);
+            let userMsgHtml = marked.parse(question || "请分析上传的图片");
+            if (currentImageBase64) {
+                userMsgHtml += `<br><img src="${currentImageBase64}" style="max-height: 120px; border-radius: 8px; margin-top: 8px; border: 1px solid #ddd;"></br>`;
+            }
+
+            addMsg("user", userMsgHtml, true);
             input.value = "";
             btn.disabled = true;
-
-            const aiBubble = addMsg("ai", "思考中...");
-
+            const aiBubble = addMsg("ai", "思考中...", true);
             try {
-                const resp = await fetch("/ask", {
+                const resp = await fetchWithAuth("/ask", {
                     method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({paper, question, thread_id: threadId}),
+                    headers: authHeaders(),
+                    body: JSON.stringify({ question: question || "请分析这张图片", thread_id: threadId, image_base64: currentImageBase64 }),
                 });
+
+                if(!resp.ok) {
+                    throw new Error("HTTP " + resp.status);
+                }
                 const data = await resp.json();
                 aiBubble.innerHTML = marked.parse(data.answer);
+                if (window.MathJax && MathJax.typesetPromise) {
+                    await MathJax.typesetPromise([aiBubble]);
+                }
+                clearImage(); // 清除图片预览
             } catch (e) {
                 aiBubble.innerHTML = "请求失败：" + e;
             } finally {
@@ -213,11 +328,10 @@
         }
 
         document.getElementById("question").addEventListener("keydown", (e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                ask();
-            }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); }
         });
+
+        refreshStats();
     </script>
 </body>
 </html>

@@ -1,6 +1,21 @@
 .env
 .venv/
 __pycache__/
+
+# 数据与隐私
+data/
+chroma_db.bak/
+.runtime/
+knowledge/
+*.db
+*.db-shm
+*.db-wal
+
+# 临时测试脚本
+check.py
+check_db.py
+init_db_test.py
+
 *.pyc
 conversations.db
 conversations.db-shm
@@ -9,5 +24,8 @@ conversation.db
 conversation.db-shm
 conversation.db-wal
 chroma_db/
-papers/*.pdf
 memory.db
+*.log
+check.py
+knowledge/
+papers/

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>登录 - 智能知识库</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, "Segoe UI", sans-serif;
+            background: #f9f9f9;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+        }
+        .card {
+            background: white;
+            padding: 32px;
+            border-radius: 16px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+            width: 360px;
+        }
+        h1 { font-size: 20px; margin: 0 0 24px; text-align: center; }
+        input {
+            width: 100%;
+            padding: 12px;
+            font-size: 15px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            font-family: inherit;
+        }
+        input:focus { outline: none; border-color: #0070f3; }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #0070f3;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 15px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        button:hover { background: #0051cc; }
+        button:disabled { background: #999; cursor: not-allowed; }
+        .switch {
+            text-align: center;
+            margin-top: 16px;
+            font-size: 13px;
+            color: #666;
+        }
+        .switch a { color: #0070f3; cursor: pointer; text-decoration: none; }
+        .error { color: #d32f2f; font-size: 13px; margin-top: 8px; text-align: center; min-height: 18px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1 id="title">登录</h1>
+        <input id="username" placeholder="用户名" autocomplete="username">
+        <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+        <button id="submit" onclick="submitAuth()">登录</button>
+        <div class="error" id="error"></div>
+        <div class="switch">
+            <span id="switchText">没有账号？</span>
+            <a onclick="toggleMode()" id="switchLink">去注册</a>
+        </div>
+    </div>
+
+    <script>
+        let mode = "login";   // login | register
+
+        function toggleMode() {
+            mode = mode === "login" ? "register" : "login";
+            document.getElementById("title").textContent = mode === "login" ? "登录" : "注册";
+            document.getElementById("submit").textContent = mode === "login" ? "登录" : "注册";
+            document.getElementById("switchText").textContent = mode === "login" ? "没有账号？" : "已有账号？";
+            document.getElementById("switchLink").textContent = mode === "login" ? "去注册" : "去登录";
+            document.getElementById("error").textContent = "";
+        }
+
+        async function submitAuth() {
+            const username = document.getElementById("username").value.trim();
+            const password = document.getElementById("password").value;
+            const btn = document.getElementById("submit");
+            const err = document.getElementById("error");
+
+            if (!username || !password) {
+                err.textContent = "请填写用户名和密码";
+                return;
+            }
+
+            btn.disabled = true;
+            err.textContent = "";
+
+            try {
+                const resp = await fetch("/" + mode, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({username, password}),
+                });
+                const data = await resp.json();
+
+                if (data.error) {
+                    err.textContent = data.error;
+                    return;
+                }
+
+                localStorage.setItem("token", data.token);
+                localStorage.setItem("username", data.username);
+                window.location.href = "/";
+            } catch (e) {
+                err.textContent = "请求失败：" + e;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.getElementById("password").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") submitAuth();
+        });
+    </script>
+</body>
+</html>

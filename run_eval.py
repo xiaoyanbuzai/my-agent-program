@@ -115,6 +115,19 @@ questions = [
     "论文自己承认的主要局限性是什么？",
 ]
 
+# questions = [
+#     "Attention Is All You Need 讲了什么？",
+#     "Transformer 的 self-attention 怎么计算？",
+#     "BERT 和 GPT 有什么区别？",
+#     "ResNet 的核心思想是什么？",
+#     "什么是对比学习？",
+#     "扩散模型和 GAN 有什么区别？",
+#     "ViT 和 CNN 有什么区别？",
+#     "什么是 prompt engineering？",
+#     "什么是 few-shot learning？",
+#     "什么是 chain-of-thought？",
+# ]
+
 results = []
 for i,q in enumerate(questions,1):
     print(f"---Q{i}:{q}")
