@@ -458,11 +458,45 @@
 
             input.value = "";
             button.disabled = true;
-            const aiBubble = addMsg("ai", "思考中……");
+            const aiBubble = addMsg("ai", "正在检索知识库……");
+
+            let fullText = "";
+            let renderTimer = null;
+
+            const scheduleRender = () => {
+                if (renderTimer) return;
+                renderTimer = setTimeout(() => {
+                    renderTimer = null;
+                    aiBubble.innerHTML = renderMarkdown(fullText);
+                }, 80);
+            };
+
+            const handleEvent = (raw) => {
+                for (const line of raw.split("\n")) {
+                    if (!line.startsWith("data:")) continue;
+                    const payloadText = line.slice(5).trim();
+                    if (!payloadText) continue;
+                    let payload;
+                    try {
+                        payload = JSON.parse(payloadText);
+                    } catch (error) {
+                        continue;
+                    }
+                    if (payload.type === "token") {
+                        fullText += payload.content || "";
+                        scheduleRender();
+                    } else if (payload.type === "done") {
+                        fullText = payload.content || fullText;
+                    } else if (payload.type === "error") {
+                        throw new Error(payload.message || "流式回答失败");
+                    }
+                }
+            };
+
             try {
-                const resp = await fetchWithAuth("/ask", {
+                const resp = await fetchWithAuth("/ask/stream", {
                     method: "POST",
-                    headers: authHeaders(),
+                    headers: { ...authHeaders(), "Accept": "text/event-stream" },
                     body: JSON.stringify({
                         question: question || "请分析这张图片",
                         thread_id: threadId,
@@ -470,16 +504,44 @@
                     }),
                 });
                 if (!resp) return;
-
-                const data = await resp.json().catch(() => ({}));
                 if (!resp.ok) {
+                    const data = await resp.json().catch(() => ({}));
                     throw new Error(data.detail || data.error || ("HTTP " + resp.status));
                 }
-                aiBubble.innerHTML = renderMarkdown(data.answer || "（空回答）");
+                if (!resp.body) {
+                    throw new Error("当前浏览器不支持流式响应");
+                }
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    let boundary;
+                    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+                        const raw = buffer.slice(0, boundary);
+                        buffer = buffer.slice(boundary + 2);
+                        handleEvent(raw);
+                    }
+                }
+                buffer += decoder.decode();
+                if (buffer.trim()) handleEvent(buffer);
+
+                if (renderTimer) {
+                    clearTimeout(renderTimer);
+                    renderTimer = null;
+                }
+                if (!fullText) throw new Error("模型没有返回内容");
+                aiBubble.innerHTML = renderMarkdown(fullText);
                 await typeMath(aiBubble);
                 clearImage();
             } catch (error) {
-                aiBubble.textContent = "请求失败：" + error;
+                if (renderTimer) clearTimeout(renderTimer);
+                aiBubble.textContent = "请求失败：" + error +
+                    (fullText ? "\n\n（已接收部分内容）" : "");
             } finally {
                 button.disabled = false;
                 input.focus();

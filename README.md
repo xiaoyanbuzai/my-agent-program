@@ -14,6 +14,7 @@
 | 可溯源引用 | 每个块带 `source / page / title`，检索结果输出 `[来源: 文件 p.页码]` | `indexer.py`、`kb_retriever.py` |
 | 联网学习 | URL 正文经 Jina Reader 提纯；arXiv PDF 下载后入库；SSRF / 大小 / 魔数校验 | `search_online.py` |
 | 文档管理 | 列出 / 删除本租户文档，同时清理向量与原始文件 | `documents.py` |
+| 流式回答 | `POST /ask/stream` 返回 SSE，前端逐 token 渲染并保留引用格式 | `web_app.py`、`templates/index.html` |
 | 评测 | 金标准问题集，输出 hit@k / MRR / 页码命中 / 引用率 | `run_eval.py` |
 
 ## 架构
@@ -23,7 +24,7 @@
         │  JWT (Authorization: Bearer)
         ▼
 FastAPI (web_app.py)
-   ├── /upload /analyze /learn /ask /documents ...
+   ├── /upload /analyze /learn /ask /ask/stream /documents ...
    ├── Agent 图 (LangGraph)：kb_search / arXiv / URL 学习 / 联网搜索
    ├── 鉴权 (auth.py) + 文档管理 (documents.py)
    └── 生命周期：SQLite checkpointer（会话） + SqliteStore（长期记忆）
@@ -94,6 +95,18 @@ uv run python scripts/reindex.py --rebuild
 - **图片入库**：`/upload` 支持图片，识别结果以 `modality=image` 入库，可被文本问题检索。
 - **扫描版 PDF**：文本层少于 50 字符时自动 OCR（默认最多前 20 页，`OCR_MAX_PAGES`），单页失败不会中断整篇。
 - **表格**：Word 表格转为 Markdown 入库，避免表格数据丢失。
+
+## 流式输出（SSE）
+
+`POST /ask/stream` 与 `/ask` 参数完全一致，响应为 `text/event-stream`，事件格式：
+
+```text
+data: {"type":"token","content":"..."}
+data: {"type":"done","content":"完整回答"}
+data: {"type":"error","message":"..."}
+```
+
+前端 [templates/index.html](templates/index.html) 使用 `fetch` + `ReadableStream` 解析，按 80ms 节流重新渲染 Markdown，结束后再触发一次 MathJax 排版；非流式 `/ask` 保留用于脚本调用与兼容。
 
 ## 混合检索参数
 

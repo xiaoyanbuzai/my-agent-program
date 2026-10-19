@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -23,7 +24,7 @@ from urllib.parse import urlparse
 
 import requests
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
@@ -578,44 +579,86 @@ def _content_to_text(content) -> str:
     return str(content or "")
 
 
-@app.post("/ask")
-async def ask(req: AskRequest, request: Request, user_id: int = Depends(get_user_id)):
-    settings = get_settings()
+def _validate_question(req: AskRequest, settings) -> str:
     question = (req.question or "").strip()
     if not question and not req.image_base64:
         raise HTTPException(status_code=400, detail="问题不能为空")
     if len(question) > settings.max_question_chars:
         raise HTTPException(status_code=400, detail="问题过长，请精简后重试")
+    return question
 
-    final_question = question
-    if req.image_base64:
-        try:
-            data, _ = decode_image_payload(
-                req.image_base64, settings.max_image_mb * MB
-            )
-            description = await run_in_threadpool(describe_image_bytes, data)
-        except UploadValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
-        except MultimodalError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from None
-        final_question = (
-            f"用户上传了一张图片，视觉模型提取的内容如下：\n{description}\n\n"
-            f"【用户的问题】{question or '请解释这张图片'}。"
-            "请结合知识库检索结果回答。"
-        )
 
-    graph = getattr(request.app.state, "graph", None)
-    if graph is None:
-        raise HTTPException(status_code=503, detail="服务尚未就绪")
+async def _build_final_question(req: AskRequest, question: str, settings) -> str:
+    if not req.image_base64:
+        return question
 
-    config = {
+    try:
+        data, _ = decode_image_payload(req.image_base64, settings.max_image_mb * MB)
+        description = await run_in_threadpool(describe_image_bytes, data)
+    except UploadValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except MultimodalError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+
+    return (
+        f"用户上传了一张图片，视觉模型提取的内容如下：\n{description}\n\n"
+        f"【用户的问题】{question or '请解释这张图片'}。"
+        "请结合知识库检索结果回答。"
+    )
+
+
+def _ask_config(user_id: int, raw_thread_id: str, settings) -> dict:
+    return {
         "configurable": {
-            "thread_id": _thread_id(user_id, req.thread_id),
+            "thread_id": _thread_id(user_id, raw_thread_id),
             "user_id": user_id,
         },
         "recursion_limit": settings.recursion_limit,
     }
 
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _stream_answer(graph, final_question: str, config: dict):
+    """同步生成器：由 StreamingResponse 放到线程池迭代，兼容 SqliteSaver。"""
+    pieces: list[str] = []
+    try:
+        for chunk, metadata in graph.stream(
+            {"messages": [{"role": "user", "content": final_question}]},
+            config,
+            stream_mode="messages",
+        ):
+            if (metadata or {}).get("langgraph_node") != "chatbot":
+                continue
+            text = _content_to_text(getattr(chunk, "content", ""))
+            if not text:
+                continue
+            pieces.append(text)
+            yield _sse({"type": "token", "content": text})
+    except Exception:
+        logger.exception("流式问答失败")
+        yield _sse({"type": "error", "message": "回答生成失败，请稍后重试"})
+        return
+
+    if not pieces:
+        yield _sse({"type": "error", "message": "模型没有返回内容，请稍后重试"})
+        return
+    yield _sse({"type": "done", "content": "".join(pieces)})
+
+
+@app.post("/ask")
+async def ask(req: AskRequest, request: Request, user_id: int = Depends(get_user_id)):
+    settings = get_settings()
+    question = _validate_question(req, settings)
+    final_question = await _build_final_question(req, question, settings)
+
+    graph = getattr(request.app.state, "graph", None)
+    if graph is None:
+        raise HTTPException(status_code=503, detail="服务尚未就绪")
+
+    config = _ask_config(user_id, req.thread_id, settings)
     try:
         result = await run_in_threadpool(
             graph.invoke,
@@ -630,6 +673,33 @@ async def ask(req: AskRequest, request: Request, user_id: int = Depends(get_user
 
     answer = result["messages"][-1].content
     return {"answer": _content_to_text(answer)}
+
+
+@app.post("/ask/stream")
+async def ask_stream(
+    req: AskRequest,
+    request: Request,
+    user_id: int = Depends(get_user_id),
+):
+    settings = get_settings()
+    question = _validate_question(req, settings)
+    final_question = await _build_final_question(req, question, settings)
+
+    graph = getattr(request.app.state, "graph", None)
+    if graph is None:
+        raise HTTPException(status_code=503, detail="服务尚未就绪")
+
+    config = _ask_config(user_id, req.thread_id, settings)
+    return StreamingResponse(
+        _stream_answer(graph, final_question, config),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
 
 
 def _analyze_upload(user_id: int, source: str) -> dict:
