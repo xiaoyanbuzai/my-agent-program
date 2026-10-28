@@ -1,9 +1,9 @@
 """统一索引构建：解析 → 父块/子块 → 写入租户隔离的向量库。
 
 关键设计：
-- 父子块：子块（≤ CHILD_CHUNK_SIZE）参与向量/BM25 检索，父块截断后存入 metadata，
+- 父子块：子块 ≤ CHILD_CHUNK_SIZE参与向量/BM25 检索，父块截断后存入 metadata,
   命中后按 parent_id 去重，避免把整章原文全部塞进上下文；
-- 溯源：每个块带 source / page / title / modality；
+- 溯源：每个块带 source / page / title / modality;
 - 一致替换：先写新块、成功后再删旧块，写失败时尽量回滚新块。
 """
 

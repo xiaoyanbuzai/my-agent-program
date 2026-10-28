@@ -129,3 +129,28 @@ def delete_conversation(db: Session, conversation: Conversation) -> None:
 def thread_key(user_id: int, conversation: Conversation) -> str:
     """与 web_app._thread_id 保持一致的 LangGraph 线程键。"""
     return f"u{user_id}-{conversation.thread_id}"
+
+def delete_messages_after(db:Session,conversation:Conversation,message_id:int) -> None:
+    """删除指定消息及之后的所有消息（用于编辑并重新生成）。"""
+    # 1. 确认这条消息存在，且属于当前会话（防止越权删别人的数据）
+    target_msg = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.id == message_id,
+            ChatMessage.conversation_id == conversation.id
+        )
+        .first()
+    )
+
+    if not target_msg:
+        raise ValueError("要编辑的消息不存在或不属于当前会话")
+
+    # 2. 删除 ID 大于等于目标消息 ID 的所有记录
+    db.query(ChatMessage).filter(
+        ChatMessage.conversation_id == conversation.id,
+        ChatMessage.id >= target_msg.id
+    ).delete(synchronize_session=False)
+
+    # 3. 更新会话的最后活跃时间
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()

@@ -1,4 +1,4 @@
-"""文档智能分析：生成摘要、关键词、主题分类（结构化 JSON）。
+"""文档智能分析：生成摘要、关键词、主题分类(结构化 JSON)。
 
 失败时返回降级结果，不阻断上传流程；所有异常写入日志而不是静默吞掉。
 """
@@ -51,7 +51,7 @@ def analyze_document(title: str, content: str, max_len: int = 4000) -> dict:
         '{"summary": "150 字以内的核心内容概括", '
         '"keywords": ["关键词1", "关键词2", "关键词3"], '
         '"category": "文档所属领域/技术类别"}\n\n'
-        f"文档标题：{title}\n文档内容：\n{snippet}"
+        f"文档标题：{title}\n文档内容:\n{snippet}"
     )
 
     try:

@@ -46,6 +46,69 @@
             -webkit-font-smoothing: antialiased;
         }
 
+        .edit-area {
+            width: 100%;
+            min-height: 60px;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            font-family: inherit;
+            font-size: 15px;
+            resize: vertical;
+            background: white;
+            color: #333;
+        }
+        .edit-container {
+            width: min(760px, 82%);
+            min-width: 0;
+        }
+        .edit-area:focus-visible {
+            outline: 2px solid var(--brand);
+            outline-offset: 1px;
+        }
+        .edit-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+            justify-content: flex-end;
+        }
+        .edit-actions button {
+            padding: 4px 12px;
+            font-size: 13px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .btn-save { background: #0070f3; color: white; border: none; }
+        .btn-save:hover { background: #0051cc; }
+        .btn-cancel { background: #eee; color: #333; border: 1px solid #ccc; }
+        .btn-cancel:hover { background: #ddd; }
+
+
+        /* 状态提示框样式 */
+        .status-tip {
+            color: #0051cc;
+            font-size: 13px;
+            background: #eef4ff;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: inline-block;
+            animation: pulse 1.5s infinite;
+            font-weight: 500;
+        }
+
+        /* 呼吸灯动画 */
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; box-shadow: 0 0 8px rgba(0, 81, 204, 0.2); }
+            100% { opacity: 0.6; }
+        }
+
+        /* 正文容器 */
+        .text-content {
+            word-break: break-word;
+        }
+
         button, input, textarea { font: inherit; }
         button { border: 0; cursor: pointer; }
         button:disabled { cursor: not-allowed; opacity: .55; }
@@ -323,6 +386,14 @@
             background: #16a34a;
             box-shadow: 0 0 0 4px rgba(22, 163, 74, .1);
         }
+        .badge.error {
+            color: #b91c1c;
+            border-color: rgba(185, 28, 28, .25);
+        }
+        .badge.error::before {
+            background: #dc2626;
+            box-shadow: 0 0 0 4px rgba(220, 38, 38, .1);
+        }
         .user-chip {
             padding: 7px 11px;
             border-radius: 999px;
@@ -427,6 +498,23 @@
             box-shadow: 0 8px 18px -10px rgba(194, 65, 12, .8);
         }
         .msg.user { justify-content: flex-end; }
+        .msg.user .edit-btn {
+            align-self: flex-start;
+            flex: 0 0 auto;
+            margin-top: 5px;
+            padding: 5px 7px;
+            border-radius: 8px;
+            color: var(--brand-deep);
+            background: rgba(255, 255, 255, .72);
+            opacity: .72;
+            transition: opacity .16s ease, background .16s ease;
+        }
+        .msg.user .edit-btn:hover:not(:disabled),
+        .msg.user .edit-btn:focus-visible {
+            opacity: 1;
+            background: #fff;
+        }
+        .msg.user .edit-btn:disabled { opacity: .35; }
         .msg.user::after {
             content: "你";
             color: #7c4a25;
@@ -984,19 +1072,214 @@
         return `${date.getMonth() + 1} 月 ${date.getDate()} 日`;
     }
 
-    function addMsg(role, text, useMarkdown = true) {
+    function setMessageId(row, msgId) {
+        if (msgId === null || msgId === undefined) return;
+        row.dataset.msgId = String(msgId);
+        const editButton = row.querySelector(".edit-btn");
+        if (editButton) editButton.disabled = false;
+    }
+
+    function addMsg(role, text, useMarkdown = true, msgId = null) {
         const chat = document.getElementById("chat");
         const row = document.createElement("div");
         row.className = "msg " + (role === "assistant" ? "ai" : role);
+        setMessageId(row, msgId);
         const bubble = document.createElement("div");
         bubble.className = "bubble";
         bubble.innerHTML = useMarkdown ? renderMarkdown(text) : escapeHtml(text);
+        if (role === "user") {
+            const editBtn = document.createElement("button");
+            editBtn.className = "edit-btn";
+            editBtn.type = "button";
+            editBtn.textContent = "✏️";
+            editBtn.title = "编辑并重新生成";
+            editBtn.setAttribute("aria-label", "编辑此问题并重新生成");
+            editBtn.disabled = msgId === null || msgId === undefined;
+            editBtn.onclick = () => {
+                if (isStreaming) return;
+                const msgId = row.dataset.msgId;
+                if (!msgId) return;
+
+                bubble.style.display = "none";
+                editBtn.style.display = "none";
+                const editContainer = document.createElement("div");
+                editContainer.className = "edit-container";
+                const textarea = document.createElement("textarea");
+                textarea.className = "edit-area";
+                textarea.setAttribute("aria-label", "编辑问题");
+                textarea.value = text;
+                const actionDiv = document.createElement("div");
+                actionDiv.className = "edit-actions";
+                const saveBtn = document.createElement("button");
+                saveBtn.className = "btn-save";
+                saveBtn.type = "button";
+                saveBtn.textContent = "保存并重新生成";
+                const cancelBtn = document.createElement("button");
+                cancelBtn.className = "btn-cancel";
+                cancelBtn.type = "button";
+                cancelBtn.textContent = "取消";
+
+                actionDiv.appendChild(cancelBtn);
+                actionDiv.appendChild(saveBtn);
+                editContainer.appendChild(textarea);
+                editContainer.appendChild(actionDiv);
+                row.insertBefore(editContainer, bubble);
+                textarea.focus();
+
+                const cancelEdit = () => {
+                    editContainer.remove();
+                    bubble.style.display = "";
+                    editBtn.style.display = "";
+                };
+                cancelBtn.onclick = cancelEdit;
+                textarea.addEventListener("keydown", (event) => {
+                    if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelEdit();
+                    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault();
+                        saveBtn.click();
+                    }
+                });
+
+                saveBtn.onclick = async () => {
+                    const newText = textarea.value.trim();
+                    if (!newText || saveBtn.disabled) return;
+                    saveBtn.disabled = true;
+                    cancelBtn.disabled = true;
+
+                    let sibling = row.nextElementSibling;
+                    while (sibling) {
+                        const next = sibling.nextElementSibling;
+                        sibling.remove();
+                        sibling = next;
+                    }
+                    row.remove();
+
+                    await submitEditedMessage(newText, msgId);
+                };
+            };
+            row.appendChild(editBtn);
+        }
+
         row.appendChild(bubble);
         chat.appendChild(row);
         document.getElementById("welcome").hidden = true;
         chat.scrollTop = chat.scrollHeight;
         return bubble;
     }
+
+    async function submitEditedMessage(newText, msgId) {
+        const userBubble = addMsg("user", newText);
+        const button = document.getElementById("submit");
+        button.disabled = true;
+        isStreaming = true;
+
+        const aiBubble = addMsg("ai", "");
+        const statusDiv = document.createElement("div");
+        statusDiv.className = "status-tip";
+        statusDiv.innerHTML = "⏳ 正在重新思考...";
+        const textDiv = document.createElement("div");
+        textDiv.className = "text-content";
+        aiBubble.appendChild(statusDiv);
+        aiBubble.appendChild(textDiv);
+
+        let fullText = "";
+        let renderTimer = null;
+        let requestError = null;
+        const scheduleRender = () => {
+            if (renderTimer) return;
+            renderTimer = setTimeout(() => {
+                renderTimer = null;
+                textDiv.innerHTML = renderMarkdown(fullText);
+                document.getElementById("chat").scrollTop = document.getElementById("chat").scrollHeight;
+            }, 80);
+        };
+
+            const handleEvent = (raw) => {
+                for (const line of raw.split("\n")) {
+                    if (!line.startsWith("data:")) continue;
+                    const payloadText = line.slice(5).trim();
+                    if (!payloadText) continue;
+                    let payload;
+                    try { payload = JSON.parse(payloadText); } catch (error) { continue; }
+
+                    if (payload.type === "user_msg_id") {
+                        setMessageId(userBubble.parentElement, payload.id);
+                    } else if (payload.type === "token") {
+                        statusDiv.style.display = "none";
+                        fullText += payload.content || "";
+                        scheduleRender();
+                    } else if (payload.type === "reset") {
+                        fullText = "";
+                        textDiv.innerHTML = "";
+                    } else if (payload.type === "status") {
+                        statusDiv.style.display = "block";
+                        statusDiv.textContent = payload.content || "⏳ 正在处理...";
+                    } else if (payload.type === "done") {
+                        fullText = payload.content || fullText;
+                    } else if (payload.type === "error") {
+                        throw new Error(payload.message || "流式回答失败");
+                    }
+                }
+            };
+
+            try {
+                const resp = await fetchWithAuth("/ask/stream", {
+                    method: "POST",
+                    headers: { ...authHeaders(), "Accept": "text/event-stream" },
+                    body: JSON.stringify({
+                        question: newText,
+                        conversation_id: activeConversationId,
+                        edit_message_id: Number(msgId),
+                    }),
+                });
+
+                if (!resp) throw new Error("登录状态已失效，请重新登录");
+                if (!resp.ok) {
+                    const data = await resp.json().catch(() => ({}));
+                    throw new Error(data.detail || "HTTP " + resp.status);
+                }
+                if (!resp.body) throw new Error("当前浏览器不支持流式响应");
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    let boundary;
+                    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+                        handleEvent(buffer.slice(0, boundary));
+                        buffer = buffer.slice(boundary + 2);
+                    }
+                }
+                buffer += decoder.decode();
+                if (buffer.trim()) handleEvent(buffer);
+                if (!fullText.trim()) throw new Error("模型没有返回内容");
+                statusDiv.style.display = "none";
+                aiBubble.innerHTML = renderMarkdown(fullText);
+                await typeMath(aiBubble);
+                await refreshConversationList();
+            } catch (error) {
+                requestError = error;
+            } finally {
+                if (renderTimer) clearTimeout(renderTimer);
+                isStreaming = false;
+                button.disabled = false;
+            }
+
+            if (requestError) {
+                try {
+                    await selectConversation(activeConversationId);
+                } catch (error) {
+                    console.error("重新加载编辑失败后的会话失败", error);
+                }
+                addMsg("system", "重新生成失败：" + (requestError.message || requestError));
+            }
+        }
+    
 
     function clearMessages() {
         document.querySelectorAll("#chat .msg").forEach((element) => element.remove());
@@ -1019,8 +1302,19 @@
         try {
             const resp = await fetchWithAuth("/stats", { headers: authHeaders() });
             if (!resp) return;
-            const stats = await resp.json();
-            document.querySelector(".badge").textContent =
+            const badge = document.querySelector(".badge");
+            const stats = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                badge.classList.add("error");
+                badge.textContent = resp.status === 409
+                    ? "知识库模型已变更，请重建索引"
+                    : "知识库统计失败";
+                badge.title = stats.detail || "请稍后重试";
+                return;
+            }
+            badge.classList.remove("error");
+            badge.title = "";
+            badge.textContent =
                 "已入库 " + stats.total_chunks + " 个知识块 · " + stats.documents + " 篇文档";
         } catch (error) { /* 忽略 */ }
     }
@@ -1126,7 +1420,12 @@
             if (messages.length) {
                 document.getElementById("welcome").hidden = true;
                 for (const message of messages) {
-                    addMsg(message.role === "user" ? "user" : "ai", message.content);
+                    addMsg(
+                        message.role === "user" ? "user" : "ai",
+                        message.content,
+                        true,
+                        message.id
+                    );
                 }
                 const chat = document.getElementById("chat");
                 chat.scrollTop = chat.scrollHeight;
@@ -1548,6 +1847,7 @@
         if (!await ensureConversation()) return;
 
         const bubble = addMsg("user", question || "请分析上传的图片");
+        const userRow = bubble.parentElement;
         if (currentImageBase64) {
             const image = document.createElement("img");
             image.src = currentImageBase64;
@@ -1559,7 +1859,24 @@
         input.value = "";
         button.disabled = true;
         isStreaming = true;
-        const aiBubble = addMsg("ai", "正在检索知识库……");
+
+        // ==========================================
+        // 核心修改点 1：拆分 AI 气泡的内部结构
+        // ==========================================
+
+        const aiBubble = addMsg("ai", "");
+
+        // 创建状态提示层
+        const statusDiv = document.createElement("div");
+        statusDiv.className = "status-tip";
+        statusDiv.innerHTML = "⏳ 正在思考...";
+
+        // 创建正文渲染层
+        const textDiv = document.createElement("div");
+        textDiv.className = "text-content";
+        
+        aiBubble.appendChild(statusDiv);
+        aiBubble.appendChild(textDiv);
 
         let fullText = "";
         let renderTimer = null;
@@ -1568,7 +1885,10 @@
             if (renderTimer) return;
             renderTimer = setTimeout(() => {
                 renderTimer = null;
-                aiBubble.innerHTML = renderMarkdown(fullText);
+                // 渲染时只更新 textDiv
+                textDiv.innerHTML = renderMarkdown(fullText);
+                const chat = document.getElementById("chat");
+                if (chat) chat.scrollTop = chat.scrollHeight;
             }, 80);
         };
 
@@ -1583,26 +1903,42 @@
                 } catch (error) {
                     continue;
                 }
-                if (payload.type === "token") {
+
+                //  新增：接收后端发来的 user_msg_id
+                if (payload.type === "user_msg_id") {
+                    setMessageId(userRow, payload.id);
+                } else if (payload.type === "token") {
+                    if (statusDiv.style.display !== "none") {
+                        statusDiv.style.display = "none";
+                    }
                     fullText += payload.content || "";
                     scheduleRender();
-                } else if (payload.type === "done") {
+                } else if (payload.type === "reset") {
+                    fullText = ""; 
+                    textDiv.innerHTML = ""; // 清空当前显示的文字
+                } else if (payload.type === "status") {
+                    // 收到后端发来的状态，更新提示文字
+                    statusDiv.style.display = "block";
+                    statusDiv.textContent = payload.content || "⏳ 正在处理...";
+                }   else if (payload.type === "done") {
                     fullText = payload.content || fullText;
-                } else if (payload.type === "error") {
+                }   else if (payload.type === "error") {
                     throw new Error(payload.message || "流式回答失败");
                 }
             }
         };
 
         try {
+             const reqBody = {
+                 question: question || "请分析这张图片",
+                 conversation_id: activeConversationId,
+                 image_base64: currentImageBase64,
+             };
+
             const resp = await fetchWithAuth("/ask/stream", {
                 method: "POST",
                 headers: { ...authHeaders(), "Accept": "text/event-stream" },
-                body: JSON.stringify({
-                    question: question || "请分析这张图片",
-                    conversation_id: activeConversationId,
-                    image_base64: currentImageBase64,
-                }),
+                body: JSON.stringify(reqBody),
             });
             if (!resp) return;
             if (!resp.ok) {
@@ -1634,14 +1970,20 @@
                 renderTimer = null;
             }
             if (!fullText) throw new Error("模型没有返回内容");
+
+            // ==========================================
+            // 核心修改点 3：结束时统一清理状态并渲染最终结果
+            // ==========================================
+            statusDiv.style.display = "none";
             aiBubble.innerHTML = renderMarkdown(fullText);
             await typeMath(aiBubble);
             clearImage();
             await refreshConversationList();
         } catch (error) {
             if (renderTimer) clearTimeout(renderTimer);
+            statusDiv.style.display = "none";
             aiBubble.textContent = "请求失败：" + error +
-                (fullText ? "\n\n（已接收部分内容）" : "");
+                (fullText ? "\n\n(已接收部分内容)" : "");
         } finally {
             isStreaming = false;
             button.disabled = false;

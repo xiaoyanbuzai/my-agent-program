@@ -75,7 +75,7 @@ def _build_context(user_id: int) -> RetrievalContext:
 
     if len(texts) >= settings.bm25_max_docs:
         logger.warning(
-            "用户 %s 的块数达到 BM25 上限 %s，关键词召回只覆盖部分数据；"
+            "用户 %s 的块数达到 BM25 上限 %s,关键词召回只覆盖部分数据;"
             "建议调大 BM25_MAX_DOCS 或引入增量索引。",
             user_id,
             settings.bm25_max_docs,

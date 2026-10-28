@@ -43,14 +43,14 @@ def truncate_text(text: str, max_chars: int) -> str:
         return cleaned
 
     window = cleaned[:max_chars]
-    boundary = max(window.rfind(mark) for mark in ("。", "！", "？", "\n"))
+    boundary = max(window.rfind(mark) for mark in ("。", "!", "?", "\n"))
     if boundary >= max_chars // 2:
         return window[: boundary + 1].rstrip() + "……"
     return window[: max_chars - 1].rstrip() + "……"
 
 
 def split_by_chars(doc: Any) -> list[dict]:
-    """无书签 PDF：逐页切块，保证每个块都带页码。"""
+    """无书签 PDF:逐页切块,保证每个块都带页码。"""
     settings = get_settings()
     splitter = _splitter(settings.parent_chunk_size, settings.parent_chunk_overlap)
     chunks: list[dict] = []
@@ -121,7 +121,7 @@ def split_by_toc(doc: Any, toc: Iterable[Any]) -> list[dict]:
 def split_text_blocks(
     text: str, *, title: str, page: int = 0, modality: str = "text"
 ) -> list[dict]:
-    """把一段纯文本切成父块（docx / txt / markdown 兜底用）。"""
+    """把一段纯文本切成父块(docx / txt / markdown 兜底用）。"""
     settings = get_settings()
     cleaned = (text or "").strip()
     if not cleaned:

@@ -1,4 +1,4 @@
-"""多格式文档解析：PDF / Word / Markdown / txt → 带页码与模态的结构化块。"""
+"""多格式文档解析:PDF / Word / Markdown / txt → 带页码与模态的结构化块。"""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def _ocr_pdf(doc: pymupdf.Document, path: Path) -> list[dict]:
             text = ocr_pdf_page(pixmap.tobytes("png"))
             succeeded += 1
         except MultimodalError as exc:
-            logger.warning("第 %s 页 OCR 失败（%s）：%s", page_index + 1, exc, path.name)
+            logger.warning("第 %s 页 OCR 失败(%s):%s", page_index + 1, exc, path.name)
             text = "[该页识别失败]"
         except Exception:
             logger.exception("第 %s 页 OCR 失败：%s", page_index + 1, path.name)
@@ -105,7 +105,7 @@ def _ocr_pdf(doc: pymupdf.Document, path: Path) -> list[dict]:
 
     if succeeded == 0:
         raise DocumentParseError(
-            "扫描版 PDF 需要视觉模型 OCR，请检查 ZHIPU_API_KEY 配置或稍后重试"
+            "扫描版 PDF 需要视觉模型 OCR,请检查 ZHIPU_API_KEY 配置或稍后重试"
         )
 
     if doc.page_count > max_pages:
@@ -182,7 +182,7 @@ def _load_docx(path: Path) -> list[dict]:
 
 
 def _load_markdown(path: Path) -> list[dict]:
-    """Markdown：按标题切节，保留正文；代码块围栏不进入正文。"""
+    """Markdown:按标题切节，保留正文；代码块围栏不进入正文。"""
     text = _read_text(path)
     sections: list[tuple[str, list[str]]] = []
     current_title = "文档开头"
@@ -241,6 +241,16 @@ def clean_raw_text(text: str) -> str:
     text = re.sub(r"[-=]{6,}", "", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # 【新增拦截】：一旦遇到单独成行的 References 或 参考文献，直接砍掉后面的所有内容
+    ref_pattern = re.compile(
+        r"\n(?:References|Bibliography|REFERENCES|参考文献|引用文献)\s*\n", 
+        re.IGNORECASE
+    )
+    match = ref_pattern.search(text)
+    if match:
+        text = text[:match.start()]
+        
     return text.strip()
 
 

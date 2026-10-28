@@ -1,4 +1,4 @@
-"""单文件入库 CLI（调试 / 批量补录用）。
+"""单文件入库 CLI(调试 / 批量补录用）。
 
 用法：
     uv run python build_index.py papers/1.pdf --user 1

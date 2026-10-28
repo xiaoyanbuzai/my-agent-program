@@ -1,11 +1,11 @@
 """检索 / 引用评测：用金标准问题集量化混合检索质量。
 
 用法：
-    uv run python run_eval.py --user 1                     # 只评测检索（不调用 LLM）
+    uv run python run_eval.py --user 1                     # 只评测检索（不调用 LLM)
     uv run python run_eval.py --user 1 --answers           # 额外生成回答并检查引用
     uv run python run_eval.py --user 1 --golden eval/golden_set.json --top-k 5
 
-金标准格式见 eval/golden_set.example.json：
+金标准格式见 eval/golden_set.example.json:
     {
       "question": "……",
       "expected_sources": ["paper.pdf"],
@@ -14,10 +14,10 @@
     }
 
 输出指标：
-- hit@k：top-k 中是否命中期望文档；
-- MRR：第一个命中结果的倒数排名；
-- page_hit：命中结果的页码是否落在期望页码；
-- citation_rate / keyword_coverage（--answers 时）。
+- hit@k:top-k 中是否命中期望文档；
+- MRR:第一个命中结果的倒数排名；
+- page_hit:命中结果的页码是否落在期望页码；
+- citation_rate / keyword_coverage(--answers 时)。
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def evaluate_retrieval(items: list[dict], user_id: int, top_k: int) -> list[dict
 
 
 def evaluate_answers(rows: list[dict], items: list[dict], user_id: int) -> None:
-    """调用 Agent 生成回答，检查引用与关键词覆盖（需要可用的 LLM Key）。"""
+    """调用 Agent 生成回答，检查引用与关键词覆盖(需要可用的 LLM Key)。"""
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.store.memory import InMemoryStore
 

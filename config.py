@@ -148,6 +148,7 @@ class Settings:
     # 模型
     llm_model: str
     llm_timeout: float
+    llm_prompt_cache_ttl: str
     vlm_model: str
     vlm_timeout: float
     embedding_model: str
@@ -223,6 +224,9 @@ def get_settings() -> Settings:
     fetch_hosts = frozenset(
         h.strip().lower() for h in fetch_hosts_raw.split(",") if h.strip()
     )
+    llm_prompt_cache_ttl = _env_str("LLM_PROMPT_CACHE_TTL", "5m")
+    if llm_prompt_cache_ttl not in {"5m", "1h"}:
+        raise RuntimeError("环境变量 LLM_PROMPT_CACHE_TTL 必须是 5m 或 1h")
 
     return Settings(
         app_env=app_env,
@@ -248,6 +252,7 @@ def get_settings() -> Settings:
         ),
         llm_model=_env_str("LLM_MODEL", "deepseek-flash"),
         llm_timeout=_env_float("LLM_TIMEOUT_SECONDS", 60.0),
+        llm_prompt_cache_ttl=llm_prompt_cache_ttl,
         vlm_model=_env_str("VLM_MODEL", "glm-4.6v-flash"),
         vlm_timeout=_env_float("VLM_TIMEOUT_SECONDS", 60.0),
         embedding_model=embedding_model,

@@ -4,7 +4,7 @@
 从物理层面避免跨租户检索:collection 内仍保留 user_id 元数据便于审计。
 
 版本策略:collection 创建时写入 ``embedding_model``。换模型后首次访问会抛出
-``EmbeddingModelMismatch``，提示运行 ``scripts/reindex.py``，避免"换了模型但没重建索引"
+``EmbeddingModelMismatch``，提示运行 ``scripts/reindex.py --rebuild``，避免"换了模型但没重建索引"
 导致的静默错检。
 """
 
@@ -36,7 +36,7 @@ class EmbeddingModelMismatch(RuntimeError):
 
 
 class PrefixedEmbeddings(Embeddings):
-    """给查询加指令前缀（BGE 中文模型需要），文档侧不加前缀。"""
+    """给查询加指令前缀(BGE 中文模型需要)，文档侧不加前缀。"""
 
     def __init__(self, base: Embeddings, query_prefix: str = "") -> None:
         self._base = base
@@ -127,13 +127,13 @@ def _open_chroma(user_id: int) -> Chroma:
     if stored_model and stored_model != model_name:
         raise EmbeddingModelMismatch(
             f"用户 {user_id} 的索引由 {stored_model} 构建，当前模型为 {model_name}。"
-            "请先运行 `uv run python scripts/reindex.py` 重建索引。"
+            "请先运行 `uv run python scripts/reindex.py --rebuild` 重建索引。"
         )
     if not stored_model:
         if db._collection.count() > 0:
             raise EmbeddingModelMismatch(
                 f"用户 {user_id} 的索引缺少模型标记（可能是旧版本数据）。"
-                "请先运行 `uv run python scripts/reindex.py` 重建索引。"
+                "请先运行 `uv run python scripts/reindex.py --rebuild` 重建索引。"
             )
         db._collection.modify(
             metadata={

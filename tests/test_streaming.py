@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 from langgraph.errors import GraphRecursionError
 
-from web_app import _is_paper_request, _sse, _stream_answer
+from web_app import _is_paper_request, _remove_repeated_answer, _sse, _stream_answer
 
 
 class FakeGraph:
@@ -39,9 +40,16 @@ def _decode(chunks):
 def test_stream_emits_tokens_and_done():
     events = _decode(_stream_answer(FakeGraph(), "问题", {}))
 
-    assert [event["type"] for event in events] == ["token", "token", "done"]
+    assert [event["type"] for event in events] == [
+        "reset",
+        "token",
+        "status",
+        "reset",
+        "token",
+        "done",
+    ]
     assert "".join(event["content"] for event in events if event["type"] == "token") == "你好。"
-    assert events[-1]["content"] == "你好。"
+    assert events[-1]["content"] == "好。"
 
 
 def test_stream_reports_error():
@@ -50,11 +58,59 @@ def test_stream_reports_error():
     assert events == [{"type": "error", "message": "回答生成失败，请稍后重试"}]
 
 
+def test_stream_reports_model_service_failure_without_exposing_exception():
+    class FailedModelGraph:
+        def stream(self, payload, config, stream_mode):
+            raise HTTPException(
+                status_code=503,
+                detail="模型服务暂时不可用，请稍后重试",
+            )
+
+    events = _decode(_stream_answer(FailedModelGraph(), "问题", {}))
+
+    assert events == [
+        {
+            "type": "error",
+            "message": "模型服务暂时不可用，请稍后重试；服务端日志已记录详细原因。",
+        }
+    ]
+
+
 def test_stream_reports_recursion_limit():
     events = _decode(_stream_answer(RecursiveGraph(), "问题", {}))
 
     assert events[0]["type"] == "error"
     assert "步骤过多" in events[0]["message"]
+
+
+def test_repeated_complete_answer_is_removed_from_final_event():
+    answer = "# 对比结论\n两篇论文关注点不同。"
+
+    class DuplicateGraph:
+        def stream(self, payload, config, stream_mode):
+            yield SimpleNamespace(content=f"{answer}\n\n{answer}"), {
+                "langgraph_node": "replanner"
+            }
+
+    events = _decode(_stream_answer(DuplicateGraph(), "比较两篇论文", {}))
+
+    assert events[-1] == {"type": "done", "content": answer}
+
+
+def test_repeated_answer_cleanup_does_not_remove_partial_overlap():
+    text = "共同结论。\n\n共同结论与差异。"
+
+    assert _remove_repeated_answer(text) == text
+
+
+def test_repeated_answer_cleanup_preserves_prefix_before_duplicate():
+    answer = "# 对比结论\n\n" + "\n".join(
+        f"第 {index} 节：论文讨论训练阶段与推理数据的关系。"
+        for index in range(8)
+    )
+    text = f"用户问题\n\n{answer}\n\n{answer}"
+
+    assert _remove_repeated_answer(text) == f"用户问题\n\n{answer}"
 
 
 def test_paper_request_detection():

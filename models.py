@@ -1,5 +1,5 @@
 """ORM 模型：用户、文档、长期记忆、会话与消息。"""
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Index
 from sqlalchemy.orm import relationship
 from db import Base
@@ -30,7 +30,7 @@ class Document(Base):
     file_path = Column(String(512))            # 对象存储 key，本地是相对路径
     file_hash = Column(String(64), index=True) # MD5，去重用
     chunk_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="documents")
 

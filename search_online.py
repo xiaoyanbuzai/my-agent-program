@@ -1,9 +1,9 @@
-"""联网能力：安全抓取、通用网页搜索、arXiv 学术检索。
+"""联网能力:安全抓取、通用网页搜索、arXiv 学术检索。
 
 安全约束：
-- 仅允许 http/https，禁止 URL 内嵌凭证与非常规端口；
+- 仅允许 http/https,禁止 URL 内嵌凭证与非常规端口；
 - 默认解析 DNS 后拒绝内网 / 回环 / 链路本地等非公网地址（可配置 FETCH_ALLOWED_HOSTS 收紧）；
-- 所有下载都有超时与字节上限，PDF 需通过 ``%PDF`` 魔数校验。
+- 所有下载都有超时与字节上限,PDF 需通过 ``%PDF`` 魔数校验。
 
 说明：``validate_public_url`` 是"解析后校验"，对 DNS rebinding 只能降低风险、无法完全消除；
 面向公网部署时应同时配置出口防火墙。
@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import gzip
 import html as _html
+import io
 import ipaddress
 import logging
 import re
@@ -113,17 +115,25 @@ def _open(request: urllib.request.Request, timeout: float):
     try:
         return _OPENER.open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
-        logger.warning("抓取返回 HTTP %s：%s", exc.code, request.full_url)
+        logger.warning("抓取返回 HTTP %s:%s", exc.code, request.full_url)
         raise FetchError(f"目标站点返回 HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        logger.warning("抓取失败：%s（%s）", request.full_url, exc)
+        logger.warning("抓取失败：%s(%s)", request.full_url, exc)
         raise FetchError("网络请求失败或超时") from exc
 
 
 def download_binary(url: str, *, max_bytes: int | None = None) -> bytes:
-    """下载二进制内容（用于 PDF），带大小与魔数校验。"""
+    """下载二进制内容(用于 PDF),带大小与魔数校验。"""
     settings = get_settings()
     safe_url = validate_public_url(url)
+    parsed = urllib.parse.urlsplit(safe_url)
+    if (
+        (parsed.hostname or "").lower().rstrip(".") == "arxiv.org"
+        and urllib.parse.unquote(parsed.path).lower().startswith("/abs/")
+    ):
+        safe_url = parsed._replace(
+            path="/pdf/" + parsed.path[len("/abs/") :]
+        ).geturl()
     limit = max_bytes or settings.max_pdf_mb * 1024 * 1024
     request = urllib.request.Request(safe_url, headers={"User-Agent": USER_AGENT})
 
@@ -138,11 +148,66 @@ def download_binary(url: str, *, max_bytes: int | None = None) -> bytes:
     return data
 
 
+def _is_pdf_url(url: str) -> bool:
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    path = urllib.parse.unquote(parsed.path).lower()
+    return path.endswith(".pdf") or (
+        host == "arxiv.org"
+        and (path.startswith("/pdf/") or path.startswith("/abs/"))
+    )
+
+
+def _extract_visible_text(html_text: str) -> str:
+    without_scripts = re.sub(
+        r"(?is)<(script|style)\b.*?</\1>", " ", html_text
+    )
+    text = re.sub(r"(?is)<[^>]+>", "\n", without_scripts)
+    text = _html.unescape(text)
+    text = re.sub(r"\n\s*\n+", "\n", text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    return text.strip()
+
+
+def _decode_payload(
+    raw: bytes, *, headers: object | None = None, max_bytes: int
+) -> bytes:
+    content_encoding = getattr(
+        headers, "get", lambda *args, **kwargs: ""
+    )("Content-Encoding", "")
+    if content_encoding.lower() == "gzip" or raw.startswith(b"\x1f\x8b\x08"):
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
+                decoded = stream.read(max_bytes + 1)
+            if len(decoded) > max_bytes:
+                raise FetchError(
+                    f"解压后的响应体超过 {max_bytes // (1024 * 1024)} MB 限制"
+                )
+            return decoded
+        except FetchError:
+            raise
+        except OSError:
+            pass
+    return raw
+
+
+def _fetch_direct_page_text(url: str, max_chars: int | None, max_bytes: int) -> str | None:
+    settings = get_settings()
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with _open(request, settings.fetch_timeout) as response:
+        raw = _read_limited(response, max_bytes)
+    decoded = _decode_payload(raw, headers=response.headers, max_bytes=max_bytes)
+    text = _extract_visible_text(decoded.decode("utf-8", "replace"))
+    if not text:
+        return None
+    return text[: max_chars or settings.fetch_max_chars]
+
+
 def fetch_page_text(url: str, max_chars: int | None = None) -> str | None:
-    """抓取网页正文（经 Jina Reader 提纯）。PDF 返回 ``__IS_PDF__`` 交给上层下载。"""
+    """抓取网页正文(经 Jina Reader 提纯)。PDF 返回 ``__IS_PDF__`` 交给上层下载。"""
     settings = get_settings()
     safe_url = validate_public_url(url)
-    if safe_url.lower().endswith(".pdf"):
+    if _is_pdf_url(safe_url):
         return "__IS_PDF__"
 
     limit = settings.fetch_max_mb * 1024 * 1024
@@ -152,7 +217,11 @@ def fetch_page_text(url: str, max_chars: int | None = None) -> str | None:
     try:
         with _open(request, settings.fetch_timeout) as response:
             raw = _read_limited(response, limit)
-    except FetchError:
+    except FetchError as exc:
+        logger.warning("Jina Reader 抓取失败，回退到直连网页抓取：%s (%s)", safe_url, exc)
+        fallback = _fetch_direct_page_text(safe_url, max_chars, limit)
+        if fallback:
+            return fallback
         raise
     except Exception as exc:  # pragma: no cover - 兜底
         logger.exception("网页正文抓取失败：%s", safe_url)
@@ -167,12 +236,12 @@ def fetch_page_text(url: str, max_chars: int | None = None) -> str | None:
 # ---------- 通用网页搜索 ----------
 
 def web_search(query: str, max_results: int = 5) -> list[dict]:
-    """多通道搜索：duckduckgo-search 优先，失败降级到 HTML 端点。"""
+    """多通道搜索:DDGS SDK 优先，失败降级到 HTML 端点。"""
     if not query or not query.strip():
         return []
 
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
 
         with DDGS(timeout=10) as ddgs:
             raw = list(ddgs.text(query, max_results=max_results))
@@ -262,7 +331,7 @@ def search_arxiv(query: str, max_results: int = 5) -> list[dict]:
 
 
 def search_topic_trending(query: str, max_results: int = 5) -> dict:
-    """主题趋势：arXiv 最新论文 + 网页结果，单侧失败不影响另一侧。"""
+    """主题趋势:arXiv 最新论文 + 网页结果，单侧失败不影响另一侧。"""
     papers: list[dict] = []
     try:
         papers = search_arxiv(query, max_results)

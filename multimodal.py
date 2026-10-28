@@ -28,12 +28,12 @@ class MultimodalError(RuntimeError):
 
 def _client():
     # 延迟导入 + 延迟初始化，避免缺少依赖或未配置 key 时影响应用启动
-    from zhipuai import ZhipuAI
+    from zai import ZhipuAiClient
 
     api_key = (os.getenv("ZHIPU_API_KEY") or "").strip()
     if not api_key:
-        raise MultimodalError("未配置 ZHIPU_API_KEY，无法进行图片/OCR 识别")
-    return ZhipuAI(api_key=api_key)
+        raise MultimodalError("未配置 ZHIPU_API_KEY,无法进行图片/OCR 识别")
+    return ZhipuAiClient(api_key=api_key)
 
 
 def _call_vlm(data: bytes, prompt: str) -> str:
@@ -61,7 +61,7 @@ def _call_vlm(data: bytes, prompt: str) -> str:
     except MultimodalError:
         raise
     except Exception as exc:  # 供应商 SDK 的异常类型不稳定，统一包装
-        logger.exception("视觉模型调用失败（model=%s）", model)
+        logger.exception("视觉模型调用失败(model=%s)", model)
         raise MultimodalError("图片识别服务暂时不可用") from exc
 
     text = (content or "").strip()
