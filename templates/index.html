@@ -35,6 +35,28 @@
             --radius: 26px;
         }
 
+        /* 新增：联网开关按钮 */
+        .web-toggle-btn {
+            width: 42px;
+            height: 42px;
+            flex: 0 0 auto;
+            border-radius: 13px;
+            display: grid;
+            place-items: center;
+            background: #f7eee3;
+            color: #a3917f;
+            font-size: 18px;
+            transition: all .15s ease;
+            border: 1px solid transparent;
+        }
+        .web-toggle-btn.active {
+            background: #eef4ff;
+            color: #0051cc;
+            border-color: rgba(0, 81, 204, 0.2);
+            box-shadow: 0 0 10px rgba(0, 81, 204, 0.1);
+        }
+        .web-toggle-btn:hover { background: #f2e2d2; }
+
         * { box-sizing: border-box; }
         html, body { height: 100%; }
         body {
@@ -945,6 +967,9 @@
                     <button onclick="clearImage()">移除</button>
                 </div>
                 <div class="composer">
+                    <button type="button" id="webToggleBtn" class="web-toggle-btn" onclick="toggleWebSearch()" title="未开启外部检索">
+                        🚫
+                    </button>
                     <button class="attach-btn" title="上传图片提问" onclick="document.getElementById('imageFile').click()">
                         <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="8.5" cy="10" r="1.3"/><path d="m21 16-4.5-4.5L7 21"/></svg>
                     </button>
@@ -1016,6 +1041,7 @@
     let activeConversationId = null;
     let currentImageBase64 = null;
     let isStreaming = false;
+    let enableWebSearch = false;
 
     if (!localStorage.getItem("token")) {
         window.location.href = "/login";
@@ -1035,6 +1061,20 @@
             return window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(source);
         } catch (error) {
             return escapeHtml(source);
+        }
+    }
+
+    function toggleWebSearch() {
+        enableWebSearch = !enableWebSearch;
+        const btn = document.getElementById("webToggleBtn");
+        if (enableWebSearch) {
+            btn.classList.add("active");
+            btn.innerHTML = "🌐"; // 开启时的图标
+            btn.title = "已开启外部检索(PubMed / arXiv / 网页)";
+        } else {
+            btn.classList.remove("active");
+            btn.innerHTML = "🚫"; // 关闭时的图标
+            btn.title = "未开启外部检索(PubMed / arXiv / 网页)";
         }
     }
 
@@ -1232,6 +1272,7 @@
                         question: newText,
                         conversation_id: activeConversationId,
                         edit_message_id: Number(msgId),
+                        enable_web_search: enableWebSearch,
                     }),
                 });
 
@@ -1846,7 +1887,8 @@
         if (!question && !currentImageBase64) return;
         if (!await ensureConversation()) return;
 
-        const bubble = addMsg("user", question || "请分析上传的图片");
+        const displayQuestion = (enableWebSearch ? "🌐 " : "") + (question || "请分析上传的图片");
+        const bubble = addMsg("user", displayQuestion);
         const userRow = bubble.parentElement;
         if (currentImageBase64) {
             const image = document.createElement("img");
@@ -1860,9 +1902,6 @@
         button.disabled = true;
         isStreaming = true;
 
-        // ==========================================
-        // 核心修改点 1：拆分 AI 气泡的内部结构
-        // ==========================================
 
         const aiBubble = addMsg("ai", "");
 
@@ -1933,6 +1972,7 @@
                  question: question || "请分析这张图片",
                  conversation_id: activeConversationId,
                  image_base64: currentImageBase64,
+                 enable_web_search: enableWebSearch,
              };
 
             const resp = await fetchWithAuth("/ask/stream", {
@@ -1971,9 +2011,7 @@
             }
             if (!fullText) throw new Error("模型没有返回内容");
 
-            // ==========================================
-            // 核心修改点 3：结束时统一清理状态并渲染最终结果
-            // ==========================================
+            
             statusDiv.style.display = "none";
             aiBubble.innerHTML = renderMarkdown(fullText);
             await typeMath(aiBubble);
@@ -2006,7 +2044,7 @@
         }
     });
 
-    // 论文下载链接需要带 JWT，浏览器直接点链接不会带 Authorization，改为 fetch + blob。
+    
     document.addEventListener("click", async (event) => {
         const link = event.target.closest ? event.target.closest("a[href^='/papers/']") : null;
         if (!link) return;

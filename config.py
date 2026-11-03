@@ -175,6 +175,21 @@ class Settings:
     memory_limit: int
     recursion_limit: int
 
+    # 开局路由：planner（多步研究）vs chatbot（直接作答）
+    router_mode: str
+    router_llm_enabled: bool
+    router_score_plan: int
+    router_score_chatbot: int
+    router_cache_ttl: int
+    router_explain: bool
+    tool_timeout: float
+
+    # 执行层数据丰富化与最终答案风格
+    enrich_abstract_limit: int
+    enrich_max_chars: int
+    answer_concise: bool
+    max_tool_rounds: int
+
     # 抓取
     fetch_timeout: float
     fetch_max_chars: int
@@ -228,6 +243,22 @@ def get_settings() -> Settings:
     if llm_prompt_cache_ttl not in {"5m", "1h"}:
         raise RuntimeError("环境变量 LLM_PROMPT_CACHE_TTL 必须是 5m 或 1h")
 
+    router_mode = _env_str("ROUTER_MODE", "auto").lower()
+    if router_mode not in {
+        "auto",
+        "rules",
+        "llm",
+        "always_planner",
+        "always_chatbot",
+    }:
+        raise RuntimeError(
+            "环境变量 ROUTER_MODE 必须是 auto/rules/llm/always_planner/always_chatbot"
+        )
+    router_score_plan = _env_int("ROUTER_SCORE_PLAN", 3, minimum=1, maximum=20)
+    router_score_chatbot = _env_int("ROUTER_SCORE_CHATBOT", 1, minimum=0, maximum=19)
+    if router_score_chatbot >= router_score_plan:
+        raise RuntimeError("ROUTER_SCORE_CHATBOT 必须小于 ROUTER_SCORE_PLAN")
+
     return Settings(
         app_env=app_env,
         debug=_env_bool("APP_DEBUG", False),
@@ -250,7 +281,7 @@ def get_settings() -> Settings:
             "DATABASE_URL",
             f"sqlite:///{(data_dir / 'app.db').as_posix()}",
         ),
-        llm_model=_env_str("LLM_MODEL", "deepseek-flash"),
+        llm_model=_env_str("LLM_MODEL", "deepseek-v4-pro"),
         llm_timeout=_env_float("LLM_TIMEOUT_SECONDS", 60.0),
         llm_prompt_cache_ttl=llm_prompt_cache_ttl,
         vlm_model=_env_str("VLM_MODEL", "glm-4.6v-flash"),
@@ -277,7 +308,24 @@ def get_settings() -> Settings:
         hybrid_weight_vector=vector_weight,
         bm25_max_docs=_env_int("BM25_MAX_DOCS", 20000, minimum=100),
         memory_limit=_env_int("MEMORY_LIMIT", 3, minimum=0, maximum=20),
-        recursion_limit=_env_int("AGENT_RECURSION_LIMIT", 24, minimum=2, maximum=60),
+        recursion_limit=_env_int("AGENT_RECURSION_LIMIT", 40, minimum=2, maximum=80),
+        router_mode=router_mode,
+        router_llm_enabled=_env_bool("ROUTER_LLM_ENABLED", True),
+        router_score_plan=router_score_plan,
+        router_score_chatbot=router_score_chatbot,
+        router_cache_ttl=_env_int(
+            "ROUTER_CACHE_TTL", 3600, minimum=0, maximum=86400
+        ),
+        router_explain=_env_bool("ROUTER_EXPLAIN", True),
+        tool_timeout=_env_float("TOOL_TIMEOUT_SECONDS", 45.0),
+        enrich_abstract_limit=_env_int(
+            "ENRICH_ABSTRACT_LIMIT", 2, minimum=0, maximum=5
+        ),
+        enrich_max_chars=_env_int(
+            "ENRICH_MAX_CHARS", 1600, minimum=400, maximum=8000
+        ),
+        answer_concise=_env_bool("ANSWER_CONCISE", True),
+        max_tool_rounds=_env_int("MAX_TOOL_ROUNDS", 4, minimum=1, maximum=12),
         fetch_timeout=_env_float("FETCH_TIMEOUT_SECONDS", 20.0),
         fetch_max_chars=_env_int("FETCH_MAX_CHARS", 8000, minimum=1000),
         fetch_max_mb=_env_int("FETCH_MAX_MB", 2, minimum=1, maximum=50),

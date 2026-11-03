@@ -15,7 +15,9 @@ import gzip
 import html as _html
 import io
 import ipaddress
+import json
 import logging
+import os
 import re
 import socket
 import urllib.error
@@ -328,6 +330,95 @@ def search_arxiv(query: str, max_results: int = 5) -> list[dict]:
             }
         )
     return results
+
+
+def search_pubmed(query: str, max_results: int = 5) -> list[dict]:
+    """通过 NCBI E-utilities 检索 PubMed,返回真实标题、作者、期刊、年份、PMID 与摘要。
+
+    分两步：先 ``esearch`` 拿 PMID 列表，再 ``esummary`` 批量取元数据。
+    返回条目字段：``title / url / authors / journal / year / summary / pmid``。
+    """
+    if not query or not query.strip():
+        return []
+
+    settings = get_settings()
+    api_key = (os.getenv("NCBI_API_KEY") or "").strip()
+    email = (os.getenv("NCBI_EMAIL") or "").strip() or "noreply@example.com"
+
+    base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    common = {"tool": "literature-agent", "email": email}
+    if api_key:
+        common["api_key"] = api_key
+
+    # 1) esearch：把自然语言 query 转成 PMID 列表（按发表日期倒序，优先最新）
+    search_params = {
+        "db": "pubmed",
+        "term": query,
+        "retmode": "json",
+        "retmax": str(max(1, max_results)),
+        "sort": "pub_date",
+        **common,
+    }
+    esearch_url = base + "/esearch.fcgi?" + urllib.parse.urlencode(search_params)
+    request = urllib.request.Request(esearch_url, headers={"User-Agent": USER_AGENT})
+    try:
+        with _open(request, settings.fetch_timeout) as response:
+            data = _read_limited(response, 5 * 1024 * 1024)
+        payload = json.loads(data.decode("utf-8"))
+    except (FetchError, ValueError) as exc:
+        logger.warning("PubMed esearch 失败：%s", exc)
+        raise FetchError("PubMed 检索服务暂时不可用") from exc
+
+    ids = list((payload.get("esearchresult") or {}).get("idlist") or [])
+    if not ids:
+        return []
+
+    # 2) esummary：按 PMID 批量获取标题/作者/期刊/年份
+    summary_params = {
+        "db": "pubmed",
+        "id": ",".join(ids[:max_results]),
+        "retmode": "json",
+        **common,
+    }
+    esummary_url = base + "/esummary.fcgi?" + urllib.parse.urlencode(summary_params)
+    request = urllib.request.Request(esummary_url, headers={"User-Agent": USER_AGENT})
+    try:
+        with _open(request, settings.fetch_timeout) as response:
+            data = _read_limited(response, 5 * 1024 * 1024)
+        payload = json.loads(data.decode("utf-8"))
+    except (FetchError, ValueError) as exc:
+        logger.warning("PubMed esummary 失败：%s", exc)
+        raise FetchError("PubMed 检索服务暂时不可用") from exc
+
+    result = payload.get("result") or {}
+    papers: list[dict] = []
+    for pmid in ids[:max_results]:
+        item = result.get(pmid)
+        if not isinstance(item, dict):
+            continue
+        authors = [
+            author.get("name", "")
+            for author in item.get("authors") or []
+            if isinstance(author, dict) and author.get("name")
+        ]
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        papers.append(
+            {
+                "title": title,
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                "authors": authors,
+                "journal": item.get("fulljournalname")
+                or item.get("source")
+                or "",
+                "year": str(item.get("pubdate") or "").split(" ")[0],
+                "summary": "",
+                "pmid": pmid,
+                "type": "pubmed",
+            }
+        )
+    return papers
 
 
 def search_topic_trending(query: str, max_results: int = 5) -> dict:

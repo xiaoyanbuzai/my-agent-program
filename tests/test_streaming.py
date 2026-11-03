@@ -37,8 +37,26 @@ def _decode(chunks):
     return events
 
 
-def test_stream_emits_tokens_and_done():
+def _without_route_status(events):
+    """去掉开头的路由判定提示（ROUTER_EXPLAIN 默认开启）。"""
+    if (
+        events
+        and events[0]["type"] == "status"
+        and str(events[0].get("content", "")).startswith("🧭")
+    ):
+        return events[1:]
+    return events
+
+
+def test_stream_emits_route_explanation_before_tokens():
     events = _decode(_stream_answer(FakeGraph(), "问题", {}))
+
+    assert events[0]["type"] == "status"
+    assert "🧭" in events[0]["content"]
+
+
+def test_stream_emits_tokens_and_done():
+    events = _without_route_status(_decode(_stream_answer(FakeGraph(), "问题", {})))
 
     assert [event["type"] for event in events] == [
         "reset",
@@ -53,7 +71,7 @@ def test_stream_emits_tokens_and_done():
 
 
 def test_stream_reports_error():
-    events = _decode(_stream_answer(BrokenGraph(), "问题", {}))
+    events = _without_route_status(_decode(_stream_answer(BrokenGraph(), "问题", {})))
 
     assert events == [{"type": "error", "message": "回答生成失败，请稍后重试"}]
 
@@ -66,7 +84,9 @@ def test_stream_reports_model_service_failure_without_exposing_exception():
                 detail="模型服务暂时不可用，请稍后重试",
             )
 
-    events = _decode(_stream_answer(FailedModelGraph(), "问题", {}))
+    events = _without_route_status(
+        _decode(_stream_answer(FailedModelGraph(), "问题", {}))
+    )
 
     assert events == [
         {
@@ -77,7 +97,9 @@ def test_stream_reports_model_service_failure_without_exposing_exception():
 
 
 def test_stream_reports_recursion_limit():
-    events = _decode(_stream_answer(RecursiveGraph(), "问题", {}))
+    events = _without_route_status(
+        _decode(_stream_answer(RecursiveGraph(), "问题", {}))
+    )
 
     assert events[0]["type"] == "error"
     assert "步骤过多" in events[0]["message"]

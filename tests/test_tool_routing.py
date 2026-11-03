@@ -160,6 +160,7 @@ def test_agent_registers_core_tools_and_supported_hermes_tools():
     assert names == [
         "kb_search_tool",
         "search_papers_tool",
+        "search_pubmed_tool",
         "web_news_tool",
         "learn_from_url_tool",
         "generate_paper_docx_tool",
@@ -175,6 +176,7 @@ def test_agent_registers_core_tools_without_hermes():
     assert names == [
         "kb_search_tool",
         "search_papers_tool",
+        "search_pubmed_tool",
         "web_news_tool",
         "learn_from_url_tool",
         "generate_paper_docx_tool",
